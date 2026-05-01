@@ -1,0 +1,317 @@
+/**
+ * posStore.ts — Main POS state management (Pinia)
+ * Manages: session, cart, items, customers, item groups
+ */
+import { defineStore } from 'pinia';
+import { ref, computed } from 'vue';
+import { useNetworkStore } from './networkStore';
+import { fetchItems } from '../services/itemService';
+import { fetchCustomers } from '../services/customerService';
+import { getAllItemGroups } from '../db/posDB';
+import call from '../lib/call';
+
+export interface POSItem {
+  item_code: string;
+  item_name: string;
+  price_list_rate: number;
+  actual_qty: number;
+  item_group: string;
+  item_image: string;
+  uom: string;
+  stock_uom: string;
+  currency: string;
+  batch_no?: string;
+  barcode?: string;
+}
+
+export interface CartItem {
+  item_code: string;
+  item_name: string;
+  qty: number;
+  rate: number;
+  amount: number;
+  uom: string;
+  discount_percentage: number;
+  batch_no?: string;
+  serial_no?: string;
+  warehouse?: string;
+}
+
+export interface Customer {
+  name: string;
+  customer_name: string;
+  mobile_no?: string;
+  email_id?: string;
+  customer_group?: string;
+  loyalty_program?: string;
+}
+
+export interface POSSession {
+  pos_opening: string;
+  pos_profile: string;
+  company: string;
+  period_start_date: string;
+  warehouse: string;
+  currency: string;
+  price_list: string;
+  tax_category?: string;
+  customer_groups?: string[];
+  payments?: Array<{ mode_of_payment: string; default: number; amount: number }>;
+  // 'POS Invoice' or 'Sales Invoice' — from POS Settings
+  invoice_type: 'POS Invoice' | 'Sales Invoice';
+}
+
+
+export const usePOSStore = defineStore('pos', () => {
+  const network = useNetworkStore();
+
+  // ─── Session ──────────────────────────────────────────────────────────────
+  const session = ref<POSSession | null>(null);
+  const isSessionLoading = ref(false);
+
+  // ─── Items ────────────────────────────────────────────────────────────────
+  const items = ref<POSItem[]>([]);
+  const itemGroups = ref<string[]>(['All']);
+  const selectedGroup = ref<string>('All');
+  const searchTerm = ref<string>('');
+  const itemsLoading = ref(false);
+  const itemsPage = ref(0);
+  const itemsPageLength = 40;
+  const hasMoreItems = ref(true);
+
+  // ─── Customers ────────────────────────────────────────────────────────────
+  const customers = ref<Customer[]>([]);
+  const customerSearch = ref<string>('');
+  const customersLoading = ref(false);
+
+  // ─── Cart ─────────────────────────────────────────────────────────────────
+  const cartItems = ref<CartItem[]>([]);
+  const selectedCustomer = ref<Customer | null>(null);
+  const cartDiscount = ref<number>(0); // global discount %
+  const additionalDiscount = ref<number>(0); // flat amount
+
+  // ─── Item Groups ─────────────────────────────────────────────────────────
+
+  async function loadItemGroups() {
+    itemGroups.value = await getAllItemGroups();
+  }
+
+  // ─── Items ────────────────────────────────────────────────────────────────
+
+  async function loadItems(reset: boolean = false) {
+    if (!session.value) return;
+    if (reset) {
+      itemsPage.value = 0;
+      hasMoreItems.value = true;
+      items.value = [];
+    }
+    if (!hasMoreItems.value) return;
+
+    itemsLoading.value = true;
+    try {
+      const result = await fetchItems({
+        search: searchTerm.value,
+        group: selectedGroup.value === 'All' ? '' : selectedGroup.value,
+        priceList: session.value.price_list,
+        posProfile: session.value.pos_profile,
+        start: itemsPage.value * itemsPageLength,
+        pageLength: itemsPageLength,
+        isOnline: network.isOnline,
+      });
+
+      if (reset) {
+        items.value = result;
+      } else {
+        items.value.push(...result);
+      }
+
+      if (result.length < itemsPageLength) hasMoreItems.value = false;
+      itemsPage.value++;
+      await loadItemGroups();
+    } catch (err) {
+      console.error('[POSStore] loadItems error:', err);
+    } finally {
+      itemsLoading.value = false;
+    }
+  }
+
+  async function searchItems(term: string) {
+    searchTerm.value = term;
+    await loadItems(true);
+  }
+
+  async function filterByGroup(group: string) {
+    selectedGroup.value = group;
+    await loadItems(true);
+  }
+
+  // ─── Customers ────────────────────────────────────────────────────────────
+
+  async function loadCustomers(search: string = '') {
+    customerSearch.value = search;
+    customersLoading.value = true;
+    try {
+      customers.value = await fetchCustomers({
+        search,
+        isOnline: network.isOnline,
+        customerGroups: session.value?.customer_groups,
+      });
+    } catch (err) {
+      console.error('[POSStore] loadCustomers error:', err);
+    } finally {
+      customersLoading.value = false;
+    }
+  }
+
+  function selectCustomer(customer: Customer) {
+    selectedCustomer.value = customer;
+  }
+
+  // ─── Cart ─────────────────────────────────────────────────────────────────
+
+  function addToCart(item: POSItem) {
+    const itemBatchNo = item.batch_no || '';
+    const existing = cartItems.value.find(
+      (ci) => ci.item_code === item.item_code && ci.batch_no === itemBatchNo
+    );
+    if (existing) {
+      existing.qty += 1;
+      existing.amount = existing.qty * existing.rate * (1 - existing.discount_percentage / 100);
+    } else {
+      cartItems.value.push({
+        item_code: item.item_code,
+        item_name: item.item_name,
+        qty: 1,
+        rate: item.price_list_rate || 0,
+        amount: item.price_list_rate || 0,
+        uom: item.uom,
+        discount_percentage: 0,
+        batch_no: itemBatchNo,
+        warehouse: session.value?.warehouse || '',
+      });
+    }
+  }
+
+  function removeFromCart(item_code: string, batch_no: string = '') {
+    cartItems.value = cartItems.value.filter(
+      (ci) => !(ci.item_code === item_code && ci.batch_no === batch_no)
+    );
+  }
+
+  function updateQty(item_code: string, qty: number, batch_no: string = '') {
+    const item = cartItems.value.find(
+      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+    );
+    if (!item) return;
+    if (qty <= 0) {
+      removeFromCart(item_code, batch_no);
+      return;
+    }
+    item.qty = qty;
+    item.amount = qty * item.rate * (1 - item.discount_percentage / 100);
+  }
+
+  function updateRate(item_code: string, rate: number, batch_no: string = '') {
+    const item = cartItems.value.find(
+      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+    );
+    if (!item) return;
+    item.rate = rate;
+    item.amount = item.qty * rate * (1 - item.discount_percentage / 100);
+  }
+
+  function updateDiscount(item_code: string, pct: number, batch_no: string = '') {
+    const item = cartItems.value.find(
+      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+    );
+    if (!item) return;
+    item.discount_percentage = pct;
+    item.amount = item.qty * item.rate * (1 - pct / 100);
+  }
+
+  function clearCart() {
+    cartItems.value = [];
+    selectedCustomer.value = null;
+    cartDiscount.value = 0;
+    additionalDiscount.value = 0;
+  }
+
+  // ─── Computed Totals ─────────────────────────────────────────────────────
+
+  const subtotal = computed(() =>
+    cartItems.value.reduce((sum, ci) => sum + ci.qty * ci.rate, 0)
+  );
+
+  const totalDiscount = computed(() => {
+    const itemDiscounts = cartItems.value.reduce(
+      (sum, ci) => sum + ci.qty * ci.rate * (ci.discount_percentage / 100),
+      0
+    );
+    const globalDisc = (subtotal.value * cartDiscount.value) / 100;
+    return itemDiscounts + globalDisc + additionalDiscount.value;
+  });
+
+  const grandTotal = computed(() =>
+    Math.max(0, subtotal.value - totalDiscount.value)
+  );
+
+  const cartCount = computed(() =>
+    cartItems.value.reduce((sum, ci) => sum + ci.qty, 0)
+  );
+
+  // ─── Session ─────────────────────────────────────────────────────────────
+
+  async function initSession(openingEntry: any, profileData: any) {
+    // Fetch invoice_type from POS Settings (Sales Invoice or POS Invoice)
+    let invoiceType: 'POS Invoice' | 'Sales Invoice' = 'POS Invoice';
+    try {
+      const posSettings = await call('frappe.client.get_single_value', {
+        doctype: 'POS Settings',
+        field: 'invoice_type',
+      });
+      if (posSettings === 'Sales Invoice') invoiceType = 'Sales Invoice';
+    } catch {
+      console.warn('[POSStore] Could not fetch POS Settings invoice_type, defaulting to POS Invoice');
+    }
+
+    session.value = {
+      pos_opening: openingEntry.name,
+      pos_profile: openingEntry.pos_profile,
+      company: openingEntry.company,
+      period_start_date: openingEntry.period_start_date,
+      warehouse: profileData.warehouse,
+      currency: profileData.currency || 'BDT',
+      price_list: profileData.selling_price_list,
+      tax_category: profileData.tax_category,
+      customer_groups: profileData.customer_groups?.map((g: any) => g.name || g) || [],
+      payments: profileData.payments || [],
+      invoice_type: invoiceType,
+    };
+    // Pre-load data
+    await Promise.all([loadItems(true), loadCustomers('')]);
+  }
+
+
+  function clearSession() {
+    session.value = null;
+    clearCart();
+    items.value = [];
+    customers.value = [];
+  }
+
+  return {
+    // Session
+    session, isSessionLoading, initSession, clearSession,
+    // Items
+    items, itemGroups, selectedGroup, searchTerm, itemsLoading,
+    loadItems, searchItems, filterByGroup,
+    // Customers
+    customers, customerSearch, customersLoading,
+    loadCustomers, selectCustomer,
+    // Cart
+    cartItems, selectedCustomer, cartDiscount, additionalDiscount,
+    addToCart, removeFromCart, updateQty, updateRate, updateDiscount, clearCart,
+    // Totals
+    subtotal, totalDiscount, grandTotal, cartCount,
+  };
+});

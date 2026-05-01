@@ -1,0 +1,317 @@
+<!--
+  Cart.vue — Right panel: customer selector, cart items, totals, pay
+-->
+<template>
+  <div class="cart">
+
+    <!-- ── Header ──────────────────────────────── -->
+    <div class="cart__head">
+      <div class="cart__head-row">
+        <div class="cart__title-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" class="cart__title-ico">
+            <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
+            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+          </svg>
+          <span class="cart__title">Cart</span>
+          <span v-if="pos.cartCount > 0" class="cart__badge">{{ pos.cartCount }}</span>
+        </div>
+        <button v-if="pos.cartItems.length > 0" class="cart__trash" @click="confirmClear" title="Clear cart">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6l-1 14H6L5 6"/>
+            <path d="M10 11v6M14 11v6"/>
+            <path d="M9 6V4h6v2"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Customer selector -->
+      <CustomerSelector />
+    </div>
+
+    <!-- ── Items list ──────────────────────────── -->
+    <div v-if="pos.cartItems.length > 0" class="cart__items">
+      <CartItem
+        v-for="(item, idx) in pos.cartItems"
+        :key="`${item.item_code}-${item.batch_no}-${idx}`"
+        :item="item"
+        :is-active="activeIdx === idx"
+        :currency="pos.session?.currency"
+        @select="activeIdx = idx"
+        @remove="pos.removeFromCart(item.item_code, item.batch_no)"
+        @update-qty="(qty) => pos.updateQty(item.item_code, qty, item.batch_no)"
+      />
+    </div>
+
+    <!-- ── Empty state ─────────────────────────── -->
+    <div v-else class="cart__empty">
+      <div class="cart__empty-ico">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32">
+          <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
+          <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+        </svg>
+      </div>
+      <p class="cart__empty-text">Cart is empty</p>
+      <span class="cart__empty-hint">Select items from the left</span>
+    </div>
+
+    <!-- ── NumPad ──────────────────────────────── -->
+    <div v-if="activeIdx !== null && pos.cartItems[activeIdx]" class="cart__numpad">
+      <NumberPad @update="onNumpadUpdate" />
+    </div>
+
+    <div class="cart__flex" />
+
+    <!-- ── Totals ──────────────────────────────── -->
+    <div v-if="pos.cartItems.length > 0" class="cart__totals">
+      <div class="cart__row">
+        <span>Subtotal</span>
+        <span>{{ fmt(pos.subtotal) }}</span>
+      </div>
+      <div v-if="pos.totalDiscount > 0" class="cart__row cart__row--disc">
+        <span>Discount</span>
+        <span>−{{ fmt(pos.totalDiscount) }}</span>
+      </div>
+      <div class="cart__row cart__row--grand">
+        <span>Total</span>
+        <span>{{ fmt(pos.grandTotal) }}</span>
+      </div>
+    </div>
+
+    <!-- ── Pay button ──────────────────────────── -->
+    <div class="cart__foot">
+      <button class="cart__pay" :disabled="!canCheckout" @click="emit('checkout')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        {{ canCheckout ? `Pay  ${fmt(pos.grandTotal)}` : 'Pay' }}
+      </button>
+    </div>
+
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed } from 'vue';
+import { usePOSStore } from '../../stores/posStore';
+import CustomerSelector from './CustomerSelector.vue';
+import CartItem from './CartItem.vue';
+import NumberPad from './NumberPad.vue';
+
+const pos = usePOSStore();
+const emit = defineEmits<{ (e: 'checkout'): void }>();
+const activeIdx = ref<number | null>(null);
+
+const canCheckout = computed(
+  () => pos.cartItems.length > 0 && !!pos.selectedCustomer && pos.grandTotal > 0
+);
+
+function fmt(v: number) {
+  return new Intl.NumberFormat('en-BD', {
+    style: 'currency',
+    currency: pos.session?.currency || 'BDT',
+    minimumFractionDigits: 0,
+  }).format(v);
+}
+
+function confirmClear() {
+  if (confirm('Clear all cart items?')) {
+    pos.clearCart();
+    activeIdx.value = null;
+  }
+}
+
+function onNumpadUpdate(mode: string, value: string) {
+  if (activeIdx.value === null) return;
+  const item = pos.cartItems[activeIdx.value];
+  if (!item) return;
+  const n = parseFloat(value) || 0;
+  if (mode === 'qty') pos.updateQty(item.item_code, n, item.batch_no);
+  else if (mode === 'rate') pos.updateRate(item.item_code, n, item.batch_no);
+  else if (mode === 'discount') pos.updateDiscount(item.item_code, n, item.batch_no);
+}
+</script>
+
+<style scoped>
+/* ── Shell ───────────────────────────────────────── */
+.cart {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--pos-bg);
+  border-left: 1px solid var(--pos-border);
+  overflow: hidden;
+}
+
+/* ── Header ──────────────────────────────────────── */
+.cart__head {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--pos-border);
+  background: var(--pos-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.cart__head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cart__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cart__title-ico { color: var(--pos-text-muted); }
+.cart__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--pos-text);
+  letter-spacing: 0.01em;
+}
+.cart__badge {
+  background: var(--pos-accent);
+  color: #fff;
+  border-radius: 99px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 20px;
+  text-align: center;
+}
+.cart__trash {
+  background: none;
+  border: 1px solid var(--pos-border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  color: var(--pos-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: all 0.1s;
+}
+.cart__trash:hover {
+  color: var(--pos-danger, #dc2626);
+  border-color: var(--pos-danger, #dc2626);
+  background: rgba(220,38,38,0.06);
+}
+
+/* ── Items ───────────────────────────────────────── */
+.cart__items {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--pos-border) transparent;
+}
+
+/* ── Empty ───────────────────────────────────────── */
+.cart__empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  color: var(--pos-text-muted);
+}
+.cart__empty-ico {
+  width: 56px; height: 56px;
+  border-radius: 14px;
+  background: var(--pos-surface);
+  border: 1px solid var(--pos-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pos-text-muted);
+}
+.cart__empty-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pos-text);
+  margin: 0;
+}
+.cart__empty-hint { font-size: 11px; color: var(--pos-text-muted); }
+
+/* ── NumPad ──────────────────────────────────────── */
+.cart__numpad {
+  padding: 10px;
+  border-top: 1px solid var(--pos-border);
+  background: var(--pos-surface);
+  flex-shrink: 0;
+}
+
+.cart__flex { flex: 1; }
+
+/* ── Totals ──────────────────────────────────────── */
+.cart__totals {
+  padding: 10px 14px;
+  border-top: 1px solid var(--pos-border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: var(--pos-surface);
+  flex-shrink: 0;
+}
+.cart__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--pos-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.cart__row--disc {
+  color: var(--pos-success, #16a34a);
+  font-weight: 600;
+}
+.cart__row--grand {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--pos-text);
+  padding-top: 7px;
+  margin-top: 2px;
+  border-top: 1px solid var(--pos-border);
+}
+
+/* ── Footer / Pay button ─────────────────────────── */
+.cart__foot {
+  padding: 10px 12px 12px;
+  background: var(--pos-surface);
+  flex-shrink: 0;
+}
+.cart__pay {
+  width: 100%;
+  padding: 13px 16px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, var(--pos-accent, #6366f1) 0%, #8b5cf6 100%);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
+  box-shadow: 0 4px 18px rgba(99,102,241,0.3);
+  letter-spacing: 0.01em;
+  font-family: inherit;
+}
+.cart__pay:hover:not(:disabled) {
+  opacity: 0.92;
+  box-shadow: 0 6px 24px rgba(99,102,241,0.4);
+}
+.cart__pay:active:not(:disabled) { transform: scale(0.98); }
+.cart__pay:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+</style>
