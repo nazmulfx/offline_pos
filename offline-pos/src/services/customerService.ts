@@ -62,7 +62,7 @@ export interface CreateCustomerData {
   customer_name: string;
   mobile_no?: string;
   email_id?: string;
-  customer_group?: string;
+  customer_group?: string;   // Should be a leaf-level (non-group) Customer Group
 }
 
 export interface CreateCustomerResult {
@@ -85,7 +85,10 @@ export async function createCustomer(
     doctype: 'Customer',
     customer_name: data.customer_name,
     customer_type: 'Individual',
-    customer_group: data.customer_group || 'All Customer Groups',
+    // 'All Customer Groups' is a group-type node — ERPNext rejects it.
+    // Use the caller-supplied group (from POS profile), then 'Individual',
+    // which is always a non-group leaf in standard ERPNext setups.
+    customer_group: data.customer_group || 'Individual',
     territory: 'All Territories',
     mobile_no: data.mobile_no || '',
     email_id: data.email_id || '',

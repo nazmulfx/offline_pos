@@ -37,13 +37,32 @@ export const useSyncStore = defineStore('sync', () => {
     await refreshPendingCount();
   }
 
-  /** Refresh CSRF token before syncing to avoid stale-token 403 */
+  /**
+   * Refresh CSRF token before syncing to avoid stale-token 400/403.
+   * Uses a POST so Frappe always returns a fresh X-Frappe-CSRF-Token header.
+   * Also falls back to reading the csrf_token cookie Frappe sets on login.
+   */
   async function refreshCSRFToken(): Promise<void> {
     try {
+      // First try: read from frappe's __csrf_token cookie (most reliable)
+      const cookieToken = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('__csrf_token='))
+        ?.split('=')?.[1];
+      if (cookieToken && cookieToken !== 'undefined') {
+        (window as any).csrf_token = decodeURIComponent(cookieToken);
+        return;
+      }
+
+      // Second try: POST to get_logged_user — Frappe always returns a fresh token
       const res = await fetch('/api/method/frappe.auth.get_logged_user', {
-        method: 'GET',
-        headers: { 'X-Frappe-Site-Name': window.location.hostname },
+        method: 'POST',
+        headers: {
+          'X-Frappe-Site-Name': window.location.hostname,
+          'Content-Type': 'application/json; charset=utf-8',
+        },
         credentials: 'include',
+        body: '{}',
       });
       if (res.ok) {
         const newCsrf = res.headers.get('X-Frappe-CSRF-Token');
@@ -96,10 +115,24 @@ export const useSyncStore = defineStore('sync', () => {
 
         // Relink any queued invoices that used this customer's temp name
         if (item.payload?.temp_name && realCustomer?.name) {
-          await updateCustomerNameInQueue(item.payload.temp_name, realCustomer.name);
-          // Remove the offline placeholder from customer cache
-          await removeOfflineCustomer(item.payload.temp_name);
-          console.log('[SyncStore] Customer synced:', item.payload.temp_name, '→', realCustomer.name);
+          const tempName = item.payload.temp_name;
+          const realName = realCustomer.name;
+
+          // ── Primary fix: update in-memory invoiceItems RIGHT NOW ──────────
+          // This ensures Step 2 always has the real customer name regardless of
+          // any IndexedDB read lag after updateCustomerNameInQueue commits.
+          for (const inv of invoiceItems) {
+            if (inv.payload?.invoice?.customer === tempName) {
+              inv.payload.invoice.customer = realName;
+              console.log(`[SyncStore] In-memory patch: invoice id=${inv.id} customer ${tempName} → ${realName}`);
+            }
+          }
+
+          // ── Also persist to IndexedDB for durability ───────────────────────
+          // (Fixed: now only resolves on tx.oncomplete, not req.onsuccess)
+          await updateCustomerNameInQueue(tempName, realName);
+          await removeOfflineCustomer(tempName);
+          console.log('[SyncStore] Customer synced:', tempName, '→', realName);
         }
 
         await removeSyncItem(item.id);
@@ -117,12 +150,21 @@ export const useSyncStore = defineStore('sync', () => {
     }
 
     // ── STEP 2: Sync invoices ────────────────────────────────────
-    // Re-fetch queue — invoice customer names may have been updated in Step 1
-    const updatedInvoiceItems = invoiceItems.length > 0
-      ? (await getSyncQueue()).filter(i => i.action === 'submit_invoice')
-      : [];
+    // Use the in-memory invoiceItems (already patched above with real customer names).
+    // No need to re-fetch from IndexedDB — in-memory state is always up-to-date.
+    for (const item of invoiceItems) {
+      // Safety guard: skip invoices whose customer is still an offline temp name.
+      // This only happens when the customer sync itself failed — retry next cycle.
+      const invoiceCustomer = item.payload?.invoice?.customer || '';
+      if (invoiceCustomer.startsWith('OFFLINE-')) {
+        console.warn(
+          `[SyncStore] Skipping invoice id=${item.id} — customer not yet synced: ${invoiceCustomer}`
+        );
+        errors.push(`Invoice id=${item.id} skipped — customer "${invoiceCustomer}" not yet synced.`);
+        failedItems.value.push(item.id);
+        continue;
+      }
 
-    for (const item of updatedInvoiceItems) {
       try {
         await syncInvoiceItem(item);
         await removeSyncItem(item.id);
@@ -205,5 +247,6 @@ export const useSyncStore = defineStore('sync', () => {
     addToQueue,
     syncAll,
     refreshPendingCount,
+    refreshCSRFToken,
   };
 });

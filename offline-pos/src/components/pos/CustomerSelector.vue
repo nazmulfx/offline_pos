@@ -160,6 +160,10 @@ async function createCustomer() {
         customer_name: newName.value.trim(),
         mobile_no: newPhone.value.trim(),
         email_id: newEmail.value.trim(),
+        // Use the first customer group configured in the POS profile.
+        // This guarantees a valid non-group leaf node from ERPNext settings.
+        // Falls back to 'Individual' (standard ERPNext leaf) if not configured.
+        customer_group: pos.session?.customer_groups?.[0] || 'Individual',
       },
       network.isOnline
     );

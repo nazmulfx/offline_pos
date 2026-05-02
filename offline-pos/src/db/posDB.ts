@@ -324,9 +324,11 @@ export async function updateCustomerNameInQueue(
       if (updated > 0) {
         console.log(`[posDB] Updated ${updated} queued invoice(s): ${tempName} → ${realName}`);
       }
-      resolve();
+      // DO NOT resolve here — store.put() is not committed until tx.oncomplete
     };
     req.onerror = () => reject(req.error);
+    tx.onerror  = () => reject(tx.error);
+    // Only resolve once the transaction is fully committed to disk
     tx.oncomplete = () => resolve();
   });
 }
