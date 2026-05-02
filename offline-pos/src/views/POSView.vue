@@ -23,8 +23,14 @@
       </div>
 
       <div class="pos-topbar__right">
-        <!-- Sync indicator -->
-        <div class="pos-topbar__sync" v-if="sync.pendingCount > 0 || sync.isSyncing">
+        <!-- Sync indicator — clickable to open the sync panel -->
+        <div
+          class="pos-topbar__sync"
+          v-if="sync.pendingCount > 0 || sync.isSyncing"
+          @click="showSyncPanel = true"
+          role="button"
+          title="View offline queue"
+        >
           <span class="pos-topbar__sync-icon" :class="{ syncing: sync.isSyncing }">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
               <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
@@ -112,6 +118,9 @@
       @closed="onPOSClosed"
     />
 
+    <!-- Offline Sync Panel -->
+    <OfflineSyncPanel :is-open="showSyncPanel" @close="showSyncPanel = false" />
+
     <!-- Success Toast -->
     <Transition name="toast">
       <div v-if="successToast" class="pos-toast" :class="{ offline: successToast.offline }">
@@ -161,6 +170,7 @@ import ItemSelector from '../components/pos/ItemSelector.vue';
 import Cart from '../components/pos/Cart.vue';
 import PaymentModal from '../components/pos/PaymentModal.vue';
 import POSClosingModal from '../components/pos/POSClosingModal.vue';
+import OfflineSyncPanel from '../components/pos/OfflineSyncPanel.vue';
 
 const router = useRouter();
 const pos = usePOSStore();
@@ -170,6 +180,7 @@ const { isDark, toggleTheme } = useTheme();
 
 const showPayment = ref(false);
 const showClosing = ref(false);
+const showSyncPanel = ref(false);
 const successToast = ref<{ name: string; offline: boolean } | null>(null);
 const closedToast = ref<string | null>(null);
 const isLoggingOut = ref(false);
@@ -177,6 +188,17 @@ const $auth = inject<any>('$auth');
 const currentTime = ref('');
 
 let clockTimer: ReturnType<typeof setInterval>;
+
+// ─── Offline reload guard ─────────────────────────────────────────────────────
+// Prevents accidental browser reload/close when offline to avoid IndexedDB data loss.
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (!network.isOnline || sync.pendingCount > 0) {
+    e.preventDefault();
+    // Modern browsers show a generic message; the string is ignored.
+    e.returnValue = 'You have unsynced data. Reload will lose offline invoices and customers. Are you sure?';
+    return e.returnValue;
+  }
+}
 
 onMounted(() => {
   if (!pos.session) {
@@ -186,10 +208,12 @@ onMounted(() => {
   updateClock();
   clockTimer = setInterval(updateClock, 1000);
   sync.refreshPendingCount();
+  window.addEventListener('beforeunload', handleBeforeUnload);
 });
 
 onBeforeUnmount(() => {
   clearInterval(clockTimer);
+  window.removeEventListener('beforeunload', handleBeforeUnload);
 });
 
 function updateClock() {
@@ -310,6 +334,13 @@ async function handleLogout() {
   color: #fbbf24;
   font-size: 12px;
   font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  user-select: none;
+}
+.pos-topbar__sync:hover {
+  background: rgba(251,191,36,0.22);
+  border-color: rgba(251,191,36,0.5);
 }
 .pos-topbar__sync-icon { display: flex; }
 .pos-topbar__sync-icon.syncing svg { animation: spin 0.8s linear infinite; }
