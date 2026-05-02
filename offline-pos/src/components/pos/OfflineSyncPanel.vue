@@ -91,35 +91,46 @@
               <div
                 v-for="item in customerItems"
                 :key="item.id"
-                class="osp-item"
-                :class="{ 'osp-item--error': isFailed(item.id) }"
+                class="osp-item-wrap"
               >
-                <div class="osp-item__avatar">
-                  {{ item.payload?.doc?.customer_name?.charAt(0)?.toUpperCase() || '?' }}
+                <div
+                  class="osp-item"
+                  :class="{ 'osp-item--error': isFailed(item.id) }"
+                >
+                  <div class="osp-item__avatar">
+                    {{ item.payload?.doc?.customer_name?.charAt(0)?.toUpperCase() || '?' }}
+                  </div>
+                  <div class="osp-item__info">
+                    <span class="osp-item__name">{{ item.payload?.doc?.customer_name || 'Unknown' }}</span>
+                    <span class="osp-item__meta">
+                      <template v-if="item.payload?.doc?.mobile_no">📞 {{ item.payload.doc.mobile_no }}</template>
+                      <template v-else-if="item.payload?.doc?.email_id">✉ {{ item.payload.doc.email_id }}</template>
+                      <template v-else>No contact info</template>
+                    </span>
+                    <span class="osp-item__temp">ID: {{ item.payload?.temp_name }}</span>
+                  </div>
+                  <div class="osp-item__status">
+                    <span v-if="isFailed(item.id)" class="osp-status osp-status--error" title="Last sync failed">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                      Failed
+                    </span>
+                    <span v-else class="osp-status osp-status--pending">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                      </svg>
+                      Pending
+                    </span>
+                    <span class="osp-item__time">{{ formatTime(item.created_at) }}</span>
+                  </div>
                 </div>
-                <div class="osp-item__info">
-                  <span class="osp-item__name">{{ item.payload?.doc?.customer_name || 'Unknown' }}</span>
-                  <span class="osp-item__meta">
-                    <template v-if="item.payload?.doc?.mobile_no">📞 {{ item.payload.doc.mobile_no }}</template>
-                    <template v-else-if="item.payload?.doc?.email_id">✉ {{ item.payload.doc.email_id }}</template>
-                    <template v-else>No contact info</template>
-                  </span>
-                  <span class="osp-item__temp">ID: {{ item.payload?.temp_name }}</span>
-                </div>
-                <div class="osp-item__status">
-                  <span v-if="isFailed(item.id)" class="osp-status osp-status--error" title="Last sync failed">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12">
-                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                    Failed
-                  </span>
-                  <span v-else class="osp-status osp-status--pending">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
-                      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                    </svg>
-                    Pending
-                  </span>
-                  <span class="osp-item__time">{{ formatTime(item.created_at) }}</span>
+                <!-- Per-item error reason -->
+                <div v-if="isFailed(item.id)" class="osp-item-error">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" class="osp-item-error__icon">
+                    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  <span>{{ getError(item.id) }}</span>
                 </div>
               </div>
             </div>
@@ -140,47 +151,58 @@
               <div
                 v-for="item in invoiceItems"
                 :key="item.id"
-                class="osp-item"
-                :class="{ 'osp-item--error': isFailed(item.id), 'osp-item--blocked': isBlocked(item) }"
+                class="osp-item-wrap"
               >
-                <div class="osp-item__avatar osp-item__avatar--invoice">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                    <polyline points="14 2 14 8 20 8"/>
+                <div
+                  class="osp-item"
+                  :class="{ 'osp-item--error': isFailed(item.id), 'osp-item--blocked': isBlocked(item) }"
+                >
+                  <div class="osp-item__avatar osp-item__avatar--invoice">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                      <polyline points="14 2 14 8 20 8"/>
+                    </svg>
+                  </div>
+                  <div class="osp-item__info">
+                    <span class="osp-item__name">
+                      {{ item.payload?.invoice?.customer || 'Unknown Customer' }}
+                    </span>
+                    <span class="osp-item__meta">
+                      {{ item.payload?.invoice?.items?.length || 0 }} item(s) ·
+                      {{ formatCurrency(invoiceTotal(item)) }}
+                    </span>
+                    <span class="osp-item__temp osp-item__temp--warn" v-if="isBlocked(item)">
+                      ⚠ Waiting for customer to sync first
+                    </span>
+                  </div>
+                  <div class="osp-item__status">
+                    <span v-if="isBlocked(item)" class="osp-status osp-status--blocked">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                        <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+                      </svg>
+                      Blocked
+                    </span>
+                    <span v-else-if="isFailed(item.id)" class="osp-status osp-status--error">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                      Failed
+                    </span>
+                    <span v-else class="osp-status osp-status--pending">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                      </svg>
+                      Pending
+                    </span>
+                    <span class="osp-item__time">{{ formatTime(item.created_at) }}</span>
+                  </div>
+                </div>
+                <!-- Per-item error reason -->
+                <div v-if="isFailed(item.id)" class="osp-item-error" :class="{ 'osp-item-error--warn': isBlocked(item) }">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" class="osp-item-error__icon">
+                    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
                   </svg>
-                </div>
-                <div class="osp-item__info">
-                  <span class="osp-item__name">
-                    {{ item.payload?.invoice?.customer || 'Unknown Customer' }}
-                  </span>
-                  <span class="osp-item__meta">
-                    {{ item.payload?.invoice?.items?.length || 0 }} item(s) ·
-                    {{ formatCurrency(invoiceTotal(item)) }}
-                  </span>
-                  <span class="osp-item__temp osp-item__temp--warn" v-if="isBlocked(item)">
-                    ⚠ Waiting for customer to sync first
-                  </span>
-                </div>
-                <div class="osp-item__status">
-                  <span v-if="isBlocked(item)" class="osp-status osp-status--blocked">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
-                      <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
-                    </svg>
-                    Blocked
-                  </span>
-                  <span v-else-if="isFailed(item.id)" class="osp-status osp-status--error">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12">
-                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                    Failed
-                  </span>
-                  <span v-else class="osp-status osp-status--pending">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
-                      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                    </svg>
-                    Pending
-                  </span>
-                  <span class="osp-item__time">{{ formatTime(item.created_at) }}</span>
+                  <span>{{ getError(item.id) }}</span>
                 </div>
               </div>
             </div>
@@ -250,7 +272,11 @@ const statusText = computed(() => {
 });
 
 function isFailed(id: number): boolean {
-  return sync.failedItems.includes(id);
+  return id in sync.failedItems;
+}
+
+function getError(id: number): string {
+  return sync.failedItems[id] || 'Unknown error';
 }
 
 function isBlocked(item: any): boolean {
@@ -508,18 +534,44 @@ watch(() => sync.isSyncing, (syncing) => { if (!syncing && props.isOpen) loadQue
 
 /* ── Items ────────────────────────────────────────────── */
 .osp-list { padding: 4px 0; }
+
+/* Wrapper groups the item card + its error box */
+.osp-item-wrap {
+  border-bottom: 1px solid var(--pos-border, #f0f2f8);
+}
+.osp-item-wrap:last-child { border-bottom: none; }
+
 .osp-item {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   padding: 10px 16px;
-  border-bottom: 1px solid var(--pos-border, #f0f2f8);
   transition: background 0.1s;
 }
-.osp-item:last-child { border-bottom: none; }
 .osp-item:hover { background: var(--pos-bg, #f7f8fc); }
 .osp-item--error  { background: rgba(239,68,68,0.04); }
 .osp-item--blocked{ background: rgba(251,191,36,0.04); }
+
+/* Per-item error reason box */
+.osp-item-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0 16px 10px;
+  padding: 8px 10px;
+  background: rgba(239,68,68,0.07);
+  border: 1px solid rgba(239,68,68,0.18);
+  border-radius: 7px;
+  color: #dc2626;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.osp-item-error--warn {
+  background: rgba(251,191,36,0.08);
+  border-color: rgba(251,191,36,0.25);
+  color: #b45309;
+}
+.osp-item-error__icon { flex-shrink: 0; margin-top: 1px; }
 
 .osp-item__avatar {
   width: 34px; height: 34px;

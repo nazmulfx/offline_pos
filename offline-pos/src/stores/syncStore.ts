@@ -25,7 +25,8 @@ export const useSyncStore = defineStore('sync', () => {
   const isSyncing = ref<boolean>(false);
   const lastSyncAt = ref<Date | null>(null);
   const syncError = ref<string | null>(null);
-  const failedItems = ref<number[]>([]);
+  // Map of sync-queue item id → error message from the last sync attempt
+  const failedItems = ref<Record<number, string>>({});
 
   async function refreshPendingCount() {
     pendingCount.value = await getSyncQueueCount();
@@ -98,7 +99,7 @@ export const useSyncStore = defineStore('sync', () => {
 
     isSyncing.value = true;
     syncError.value = null;
-    failedItems.value = [];
+    failedItems.value = {};  // reset per-item errors
 
     await refreshCSRFToken();
 
@@ -137,8 +138,9 @@ export const useSyncStore = defineStore('sync', () => {
 
         await removeSyncItem(item.id);
       } catch (err: any) {
-        failedItems.value.push(item.id);
-        errors.push('Customer: ' + extractErrorMessage(err));
+        const msg = extractErrorMessage(err);
+        failedItems.value[item.id] = msg;
+        errors.push('Customer: ' + msg);
         console.error('[SyncStore] Customer sync failed id=' + item.id, err);
         if (isAuthError(err)) {
           syncError.value = 'Authentication error. Please refresh the page.';
@@ -157,11 +159,10 @@ export const useSyncStore = defineStore('sync', () => {
       // This only happens when the customer sync itself failed — retry next cycle.
       const invoiceCustomer = item.payload?.invoice?.customer || '';
       if (invoiceCustomer.startsWith('OFFLINE-')) {
-        console.warn(
-          `[SyncStore] Skipping invoice id=${item.id} — customer not yet synced: ${invoiceCustomer}`
-        );
-        errors.push(`Invoice id=${item.id} skipped — customer "${invoiceCustomer}" not yet synced.`);
-        failedItems.value.push(item.id);
+        const blockedMsg = `Waiting for customer "${invoiceCustomer}" to sync first before this invoice can be submitted.`;
+        console.warn(`[SyncStore] Skipping invoice id=${item.id} — customer not yet synced: ${invoiceCustomer}`);
+        errors.push(`Invoice id=${item.id} skipped — customer not yet synced.`);
+        failedItems.value[item.id] = blockedMsg;
         continue;
       }
 
@@ -169,8 +170,9 @@ export const useSyncStore = defineStore('sync', () => {
         await syncInvoiceItem(item);
         await removeSyncItem(item.id);
       } catch (err: any) {
-        failedItems.value.push(item.id);
-        errors.push('Invoice: ' + extractErrorMessage(err));
+        const msg = extractErrorMessage(err);
+        failedItems.value[item.id] = msg;
+        errors.push('Invoice: ' + msg);
         console.error('[SyncStore] Invoice sync failed id=' + item.id, err);
         if (isAuthError(err)) {
           syncError.value = 'Authentication error. Please refresh the page.';
