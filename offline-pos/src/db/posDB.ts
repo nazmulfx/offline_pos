@@ -294,3 +294,49 @@ export async function getSyncQueueCount(): Promise<number> {
     req.onerror = () => reject(req.error);
   });
 }
+
+/**
+ * After an offline customer syncs and gets a real ERPNext name,
+ * update any queued 'submit_invoice' items that reference the temp name.
+ */
+export async function updateCustomerNameInQueue(
+  tempName: string,
+  realName: string
+): Promise<void> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('sync_queue', 'readwrite');
+    const store = tx.objectStore('sync_queue');
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const items: any[] = req.result;
+      let updated = 0;
+      for (const item of items) {
+        if (
+          item.action === 'submit_invoice' &&
+          item.payload?.invoice?.customer === tempName
+        ) {
+          item.payload.invoice.customer = realName;
+          store.put(item);
+          updated++;
+        }
+      }
+      if (updated > 0) {
+        console.log(`[posDB] Updated ${updated} queued invoice(s): ${tempName} → ${realName}`);
+      }
+      resolve();
+    };
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => resolve();
+  });
+}
+
+/**
+ * Remove an offline customer (temp name) from the cache after sync.
+ * The real customer will be fetched on next load.
+ */
+export async function removeOfflineCustomer(tempName: string): Promise<void> {
+  return withStore<undefined>('customers', 'readwrite', (store) =>
+    store.delete(tempName) as IDBRequest<undefined>
+  );
+}

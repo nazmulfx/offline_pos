@@ -84,8 +84,11 @@
               <input v-model="newPhone" type="tel" placeholder="Mobile No" class="cs__input" />
               <input v-model="newEmail" type="email" placeholder="Email" class="cs__input" />
               <button class="cs__save" :disabled="!newName.trim() || isSaving" @click="createCustomer">
-                {{ isSaving ? 'Saving…' : 'Save Customer' }}
+                {{ isSaving ? 'Saving…' : network.isOnline ? 'Save Customer' : 'Save Offline' }}
               </button>
+              <p v-if="!network.isOnline" class="cs__offline-note">
+                Customer will sync to ERPNext when online
+              </p>
             </div>
           </Transition>
         </div>
@@ -97,10 +100,12 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onBeforeUnmount, computed } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
+import { useNetworkStore } from '../../stores/networkStore';
 import { createCustomer as apiCreateCustomer } from '../../services/customerService';
 import type { Customer } from '../../stores/posStore';
 
 const pos = usePOSStore();
+const network = useNetworkStore();
 const isOpen = ref(false);
 const search = ref('');
 const searchInput = ref<HTMLInputElement | null>(null);
@@ -150,16 +155,27 @@ async function createCustomer() {
   if (!newName.value.trim() || isSaving.value) return;
   isSaving.value = true;
   try {
-    const customer = await apiCreateCustomer({
-      customer_name: newName.value.trim(),
-      mobile_no: newPhone.value.trim(),
-      email_id: newEmail.value.trim(),
-    });
+    const result = await apiCreateCustomer(
+      {
+        customer_name: newName.value.trim(),
+        mobile_no: newPhone.value.trim(),
+        email_id: newEmail.value.trim(),
+      },
+      network.isOnline
+    );
+
+    // Refresh customer list (IndexedDB now includes the new one)
     await pos.loadCustomers('');
-    pos.selectCustomer(customer);
+    // Select the newly created customer
+    pos.selectCustomer(result.customer);
+
     newName.value = ''; newPhone.value = ''; newEmail.value = '';
     showCreate.value = false;
     isOpen.value = false;
+
+    if (result.offline) {
+      console.info('[CustomerSelector] Customer saved offline — will sync when online.');
+    }
   } catch (err) {
     console.error('[CustomerSelector] Create error:', err);
   } finally {
@@ -357,4 +373,11 @@ onBeforeUnmount(() => {
 .cs-slide-enter-active, .cs-slide-leave-active { transition: all 0.15s ease; overflow: hidden; max-height: 200px; }
 .cs-slide-enter-from, .cs-slide-leave-to { opacity: 0; max-height: 0; }
 @keyframes cs-rot { to { transform: rotate(360deg); } }
+.cs__offline-note {
+  margin: 0;
+  font-size: 10px;
+  color: #d97706;
+  text-align: center;
+  padding: 2px 4px;
+}
 </style>
