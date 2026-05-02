@@ -41,6 +41,10 @@ watch(
   () => networkStore.isOnline,
   async (online) => {
     if (online) {
+      // Wait for TCP stack to settle — the 'online' event fires before
+      // the network is actually ready for HTTP requests
+      await new Promise(r => setTimeout(r, 1500));
+
       // Re-read cookie to get fresh auth state
       auth.cookie = Object.fromEntries(
         document.cookie.split('; ').filter(Boolean).map((part) => {

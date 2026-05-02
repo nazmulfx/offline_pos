@@ -6,7 +6,17 @@
 
 import router from '../router';
 
-export default async function call(method: string, args?: Record<string, any>): Promise<any> {
+interface CallOptions {
+  /** If true, skip the automatic redirect to Login on 401/403.
+   *  Use for background operations like sync that handle auth errors themselves. */
+  skipAuthRedirect?: boolean;
+}
+
+export default async function call(
+  method: string,
+  args?: Record<string, any>,
+  options: CallOptions = {}
+): Promise<any> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'Content-Type': 'application/json; charset=utf-8',
@@ -23,9 +33,14 @@ export default async function call(method: string, args?: Record<string, any>): 
     method: 'POST',
     headers,
     body: JSON.stringify(args || {}),
+    credentials: 'include',
   });
 
   if (res.ok) {
+    // Update CSRF token from response headers if Frappe sends a fresh one
+    const newCsrf = res.headers.get('X-Frappe-CSRF-Token');
+    if (newCsrf) (window as any).csrf_token = newCsrf;
+
     const data = await res.json();
     // frappe.client.* calls return data.message
     // login returns data directly
@@ -58,6 +73,7 @@ export default async function call(method: string, args?: Record<string, any>): 
   const err: any = new Error(errorParts.join('\n'));
   err.exc_type = errorBody.exc_type;
   err.exc = exception;
+  err.status = res.status;
   err.messages = errorBody._server_messages
     ? JSON.parse(errorBody._server_messages)
     : [];
@@ -74,8 +90,8 @@ export default async function call(method: string, args?: Record<string, any>): 
       : ['Internal Server Error'];
   }
 
-  // Redirect to login on 401/403
-  if ([401, 403].includes(res.status)) {
+  // Redirect to login on 401/403 — but NOT during background sync
+  if (!options.skipAuthRedirect && [401, 403].includes(res.status)) {
     const currentRoute = router.currentRoute.value;
     if (currentRoute.name !== 'Login') {
       router.push({ name: 'Login' });
