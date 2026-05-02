@@ -61,6 +61,9 @@ watch(
 
       console.log('[App] Back online — starting sync...');
       await syncStore.syncAll();
+      // Re-refresh CSRF after sync so subsequent UI-triggered API calls
+      // (e.g. fetchCustomers) also use a fresh token, not the pre-sync one.
+      await syncStore.refreshCSRFToken();
     }
   }
 );

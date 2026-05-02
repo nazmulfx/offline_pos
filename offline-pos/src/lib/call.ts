@@ -15,7 +15,8 @@ interface CallOptions {
 export default async function call(
   method: string,
   args?: Record<string, any>,
-  options: CallOptions = {}
+  options: CallOptions = {},
+  _retried = false   // internal: set to true on auto-retry to prevent infinite loops
 ): Promise<any> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -56,6 +57,19 @@ export default async function call(
     errorBody = await res.json();
   } catch {
     errorBody = { _error_message: 'Internal Server Error' };
+  }
+
+  // Auto-retry once on CSRFTokenError: refresh from cookie and retry
+  if (!_retried && (res.status === 400 || res.status === 403) && errorBody.exc_type === 'CSRFTokenError') {
+    const cookieToken = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('__csrf_token='))
+      ?.split('=')?.[1];
+    if (cookieToken && cookieToken !== 'undefined') {
+      (window as any).csrf_token = decodeURIComponent(cookieToken);
+      console.warn('[call] CSRF token refreshed from cookie, retrying:', method);
+      return call(method, args, options, true);
+    }
   }
 
   const errorParts = [

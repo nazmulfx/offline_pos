@@ -73,7 +73,9 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     // POS Invoice needs the opening entry reference
     doc.pos_opening_entry = session.pos_opening;
   } else {
-    // Sales Invoice with is_pos needs this flag
+    // Sales Invoice with is_pos=1 ALSO requires pos_opening_entry
+    // for ERPNext's validate_pos_opening_entry() check
+    doc.pos_opening_entry = session.pos_opening;
     doc.is_created_using_pos = 1;
   }
 
