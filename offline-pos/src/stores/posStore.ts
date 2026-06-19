@@ -274,6 +274,29 @@ export const usePOSStore = defineStore('pos', () => {
       console.warn('[POSStore] Could not fetch POS Settings invoice_type, defaulting to POS Invoice');
     }
 
+    let fullOpeningEntry = openingEntry;
+    if (!openingEntry.balance_details) {
+      try {
+        fullOpeningEntry = await call('frappe.client.get', {
+          doctype: 'POS Opening Entry',
+          name: openingEntry.name,
+        });
+      } catch (err) {
+        console.error('[POSStore] Failed to fetch full opening entry:', err);
+      }
+    }
+
+    const balanceDetails = fullOpeningEntry.balance_details || [];
+    const payments = (profileData.payments || []).map((p: any) => {
+      const openingDetail = balanceDetails.find((d: any) => d.mode_of_payment === p.mode_of_payment);
+      return {
+        mode_of_payment: p.mode_of_payment,
+        default: p.default || 0,
+        amount: p.amount || 0,
+        opening_amount: openingDetail ? (openingDetail.opening_amount || 0) : 0,
+      };
+    });
+
     session.value = {
       pos_opening: openingEntry.name,
       pos_profile: openingEntry.pos_profile,
@@ -284,7 +307,7 @@ export const usePOSStore = defineStore('pos', () => {
       price_list: profileData.selling_price_list,
       tax_category: profileData.tax_category,
       customer_groups: profileData.customer_groups?.map((g: any) => g.name || g) || [],
-      payments: profileData.payments || [],
+      payments,
       invoice_type: invoiceType,
     };
     // Pre-load data
