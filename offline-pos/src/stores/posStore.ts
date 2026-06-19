@@ -22,6 +22,8 @@ export interface POSItem {
   currency: string;
   batch_no?: string;
   barcode?: string;
+  item_tax_template?: string;
+  item_tax_rate?: string;
 }
 
 export interface CartItem {
@@ -35,6 +37,8 @@ export interface CartItem {
   batch_no?: string;
   serial_no?: string;
   warehouse?: string;
+  item_tax_template?: string;
+  item_tax_rate?: string;
 }
 
 export interface Customer {
@@ -188,6 +192,8 @@ export const usePOSStore = defineStore('pos', () => {
         discount_percentage: 0,
         batch_no: itemBatchNo,
         warehouse: session.value?.warehouse || '',
+        item_tax_template: item.item_tax_template,
+        item_tax_rate: item.item_tax_rate,
       });
     }
   }
@@ -251,9 +257,48 @@ export const usePOSStore = defineStore('pos', () => {
     return itemDiscounts + globalDisc + additionalDiscount.value;
   });
 
-  const grandTotal = computed(() =>
-    Math.max(0, subtotal.value - totalDiscount.value)
+  const taxes = computed(() => {
+    const taxMap: Record<string, { account_head: string; rate: number; tax_amount: number; description: string }> = {};
+
+    cartItems.value.forEach((ci) => {
+      const itemNet = ci.qty * ci.rate * (1 - ci.discount_percentage / 100);
+
+      let itemTaxRate: Record<string, number> = {};
+      if (ci.item_tax_rate) {
+        try {
+          itemTaxRate = typeof ci.item_tax_rate === 'string'
+            ? JSON.parse(ci.item_tax_rate)
+            : ci.item_tax_rate;
+        } catch (e) {
+          console.warn('Failed to parse item_tax_rate:', ci.item_tax_rate, e);
+        }
+      }
+
+      Object.entries(itemTaxRate).forEach(([account, rate]) => {
+        const amt = itemNet * (rate / 100);
+        if (!taxMap[account]) {
+          taxMap[account] = {
+            account_head: account,
+            rate: rate,
+            tax_amount: 0,
+            description: account.split(' - ')[0],
+          };
+        }
+        taxMap[account].tax_amount += amt;
+      });
+    });
+
+    return Object.values(taxMap);
+  });
+
+  const totalTaxes = computed(() =>
+    taxes.value.reduce((sum, t) => sum + t.tax_amount, 0)
   );
+
+  const grandTotal = computed(() => {
+    const rawTotal = subtotal.value - totalDiscount.value + totalTaxes.value;
+    return Math.max(0, rawTotal);
+  });
 
   const cartCount = computed(() =>
     cartItems.value.reduce((sum, ci) => sum + ci.qty, 0)
@@ -335,6 +380,6 @@ export const usePOSStore = defineStore('pos', () => {
     cartItems, selectedCustomer, cartDiscount, additionalDiscount,
     addToCart, removeFromCart, updateQty, updateRate, updateDiscount, clearCart,
     // Totals
-    subtotal, totalDiscount, grandTotal, cartCount,
+    subtotal, totalDiscount, grandTotal, cartCount, taxes, totalTaxes,
   };
 });
