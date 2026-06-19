@@ -53,3 +53,7 @@ jspm_packages/
 
 # Aider AI Chat
 .aider*
+
+# Ignore Build Assets
+offline_pos/www/offline-pos.html
+offline_pos/public/offline-pos/*
