@@ -21,7 +21,11 @@ interface CreateInvoicePayload {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function today(): string {
-  return new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
@@ -36,6 +40,36 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
 
   const isPOSInvoice = session.invoice_type === 'POS Invoice';
   const doctype = isPOSInvoice ? 'POS Invoice' : 'Sales Invoice';
+
+  // Build taxes table
+  const uniqueTaxes: Record<string, any> = {};
+  cartItems.forEach((item) => {
+    if (item.item_tax_rate) {
+      let rates: Record<string, number> = {};
+      try {
+        rates = typeof item.item_tax_rate === 'string'
+          ? JSON.parse(item.item_tax_rate)
+          : item.item_tax_rate;
+      } catch (e) {
+        console.warn('Failed to parse item_tax_rate:', item.item_tax_rate, e);
+      }
+      Object.keys(rates).forEach((accountHead) => {
+        if (!uniqueTaxes[accountHead]) {
+          uniqueTaxes[accountHead] = {
+            charge_type: 'On Net Total',
+            account_head: accountHead,
+            description: accountHead.split(' - ')[0],
+            rate: 0,
+            set_by_item_tax_template: 1,
+            category: 'Total',
+            add_deduct_tax: 'Add',
+          };
+        }
+      });
+    }
+  });
+
+  const docTaxes = Object.values(uniqueTaxes);
 
   const doc: Record<string, any> = {
     doctype,
@@ -58,6 +92,8 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
       uom: item.uom,
       warehouse: item.warehouse || session.warehouse,
       discount_percentage: item.discount_percentage || 0,
+      item_tax_template: item.item_tax_template || null,
+      item_tax_rate: typeof item.item_tax_rate === 'object' ? JSON.stringify(item.item_tax_rate) : (item.item_tax_rate || '{}'),
       ...(item.batch_no ? { batch_no: item.batch_no } : {}),
       ...(item.serial_no ? { serial_no: item.serial_no } : {}),
     })),
@@ -68,6 +104,10 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
         amount: p.amount,
       })),
   };
+
+  if (docTaxes.length > 0) {
+    doc.taxes = docTaxes;
+  }
 
   if (isPOSInvoice) {
     // POS Invoice needs the opening entry reference

@@ -15,7 +15,19 @@
           <!-- Order Summary -->
           <div class="payment-modal__summary">
             <div class="payment-modal__summary-row">
-              <span>Grand Total</span>
+              <span>Net Total</span>
+              <span>{{ fmt(netTotal) }}</span>
+            </div>
+            <div
+              v-for="tax in pos.taxes"
+              :key="tax.account_head"
+              class="payment-modal__summary-row"
+            >
+              <span>{{ tax.description }} ({{ tax.rate }}%)</span>
+              <span>{{ fmt(tax.tax_amount) }}</span>
+            </div>
+            <div class="payment-modal__summary-row payment-modal__summary-row--divider">
+              <span class="font-bold">Grand Total</span>
               <span class="payment-modal__grand">{{ fmt(pos.grandTotal) }}</span>
             </div>
             <div class="payment-modal__summary-row">
@@ -162,6 +174,8 @@ const amountPaid = computed(() =>
 );
 
 const change = computed(() => Math.max(0, amountPaid.value - pos.grandTotal));
+
+const netTotal = computed(() => pos.subtotal - pos.totalDiscount);
 
 const canSubmit = computed(() =>
   amountPaid.value >= pos.grandTotal && pos.selectedCustomer && pos.cartItems.length > 0
@@ -314,6 +328,15 @@ function closeIfNotSubmitting() { if (!isSubmitting.value) close(); }
 }
 .paid-ok { color: #34d399 !important; font-weight: 700; }
 .payment-modal__change { color: #34d399; font-weight: 700; }
+.payment-modal__summary-row--divider {
+  border-top: 1px dashed var(--pos-border);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+.font-bold {
+  font-weight: 700;
+  color: var(--pos-text);
+}
 .payment-modal__methods {
   padding: 14px 20px;
   display: flex;

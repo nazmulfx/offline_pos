@@ -72,6 +72,14 @@
         <span>Discount</span>
         <span>−{{ fmt(pos.totalDiscount) }}</span>
       </div>
+      <div
+        v-for="tax in pos.taxes"
+        :key="tax.account_head"
+        class="cart__row"
+      >
+        <span>{{ tax.description }} ({{ tax.rate }}%)</span>
+        <span>{{ fmt(tax.tax_amount) }}</span>
+      </div>
       <div class="cart__row cart__row--grand">
         <span>Total</span>
         <span>{{ fmt(pos.grandTotal) }}</span>

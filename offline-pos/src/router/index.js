@@ -18,6 +18,10 @@ const routes = [
     name: "POS",
     component: () => import("../views/POSView.vue"),
   },
+  {
+    path: "/:pathMatch(.*)*",
+    redirect: "/",
+  },
 ];
 
 const router = createRouter({
