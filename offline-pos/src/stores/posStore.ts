@@ -75,7 +75,11 @@ export const usePOSStore = defineStore('pos', () => {
   const network = useNetworkStore();
 
   // ─── Session ──────────────────────────────────────────────────────────────
-  const session = ref<POSSession | null>(null);
+  const session = ref<POSSession | null>(
+    localStorage.getItem('pos_session')
+      ? JSON.parse(localStorage.getItem('pos_session')!)
+      : null
+  );
   const isSessionLoading = ref(false);
 
   // ─── Items ────────────────────────────────────────────────────────────────
@@ -94,13 +98,64 @@ export const usePOSStore = defineStore('pos', () => {
   const customersLoading = ref(false);
 
   // ─── Cart ─────────────────────────────────────────────────────────────────
-  const cartItems = ref<CartItem[]>([]);
-  const selectedCustomer = ref<Customer | null>(null);
-  const cartDiscount = ref<number>(0); // global discount %
-  const additionalDiscount = ref<number>(0); // flat amount
-  const discountType = ref<'percent' | 'amount'>('percent');
+  const cartItems = ref<CartItem[]>(
+    localStorage.getItem('pos_cart_items')
+      ? JSON.parse(localStorage.getItem('pos_cart_items')!)
+      : []
+  );
+  const selectedCustomer = ref<Customer | null>(
+    localStorage.getItem('pos_selected_customer')
+      ? JSON.parse(localStorage.getItem('pos_selected_customer')!)
+      : null
+  );
+  const cartDiscount = ref<number>(
+    localStorage.getItem('pos_cart_discount')
+      ? parseFloat(localStorage.getItem('pos_cart_discount')!)
+      : 0
+  );
+  const additionalDiscount = ref<number>(
+    localStorage.getItem('pos_additional_discount')
+      ? parseFloat(localStorage.getItem('pos_additional_discount')!)
+      : 0
+  );
+  const discountType = ref<'percent' | 'amount'>(
+    (localStorage.getItem('pos_discount_type') as any) || 'percent'
+  );
   const selectedItemIdx = ref<number | null>(null);
   const warehouses = ref<string[]>([]);
+
+  // Watchers to persist state
+  watch(session, (newVal) => {
+    if (newVal) {
+      localStorage.setItem('pos_session', JSON.stringify(newVal));
+    } else {
+      localStorage.removeItem('pos_session');
+    }
+  }, { deep: true });
+
+  watch(cartItems, (newVal) => {
+    localStorage.setItem('pos_cart_items', JSON.stringify(newVal));
+  }, { deep: true });
+
+  watch(selectedCustomer, (newVal) => {
+    if (newVal) {
+      localStorage.setItem('pos_selected_customer', JSON.stringify(newVal));
+    } else {
+      localStorage.removeItem('pos_selected_customer');
+    }
+  });
+
+  watch(cartDiscount, (newVal) => {
+    localStorage.setItem('pos_cart_discount', newVal.toString());
+  });
+
+  watch(additionalDiscount, (newVal) => {
+    localStorage.setItem('pos_additional_discount', newVal.toString());
+  });
+
+  watch(discountType, (newVal) => {
+    localStorage.setItem('pos_discount_type', newVal);
+  });
 
   const selectedCartItem = computed(() => {
     if (selectedItemIdx.value === null) return null;
@@ -135,6 +190,79 @@ export const usePOSStore = defineStore('pos', () => {
         pageLength: itemsPageLength,
         isOnline: network.isOnline,
       });
+
+      if (network.isOnline && result.length > 0) {
+        try {
+          const itemCodes = result.map((i: any) => i.item_code);
+          const priceList = session.value.price_list;
+
+          const [uomDetails, priceDetails] = await Promise.all([
+            call('frappe.client.get_list', {
+              doctype: 'UOM Conversion Detail',
+              parent: 'Item',
+              filters: { parent: ['in', itemCodes] },
+              fields: ['parent', 'uom', 'conversion_factor'],
+              limit_page_length: 5000,
+            }),
+            call('frappe.client.get_list', {
+              doctype: 'Item Price',
+              filters: {
+                item_code: ['in', itemCodes],
+                price_list: priceList,
+              },
+              fields: ['item_code', 'uom', 'price_list_rate'],
+              limit_page_length: 5000,
+            })
+          ]);
+
+          const uomList = uomDetails || [];
+          const priceListRecords = priceDetails || [];
+
+          const db = await openPOSDB();
+          const tx = db.transaction('items', 'readwrite');
+          const store = tx.objectStore('items');
+
+          result.forEach((item: any) => {
+            const uoms = uomList
+              .filter((ud: any) => ud.parent === item.item_code)
+              .map((ud: any) => ({
+                uom: ud.uom,
+                conversion_factor: ud.conversion_factor,
+              }));
+            
+            if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
+              uoms.push({ uom: item.uom, conversion_factor: 1 });
+            }
+            if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
+              uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
+            }
+            item.uoms = uoms;
+
+            const pricesMap: Record<string, number> = {};
+            if (item.price_list_rate !== undefined) {
+              pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
+            }
+            priceListRecords
+              .filter((pd: any) => pd.item_code === item.item_code)
+              .forEach((pd: any) => {
+                if (pd.uom && pd.price_list_rate !== undefined) {
+                  pricesMap[pd.uom] = pd.price_list_rate;
+                }
+              });
+            item.prices = pricesMap;
+            item.price_list_name = priceList;
+
+            store.put(item);
+          });
+
+          await new Promise<void>((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          });
+        } catch (enrichErr) {
+          console.warn('[POSStore] Batch enrichment of UOM/Prices failed:', enrichErr);
+        }
+      }
 
       if (reset) {
         items.value = result;
@@ -547,7 +675,7 @@ export const usePOSStore = defineStore('pos', () => {
         req.onerror = () => resolve(null);
       });
 
-      if (cachedItem && cachedItem.uoms && cachedItem.prices) {
+      if (cachedItem && cachedItem.uoms && cachedItem.prices && cachedItem.price_list_name === priceList) {
         return {
           uoms: cachedItem.uoms,
           prices: cachedItem.prices,
@@ -587,11 +715,26 @@ export const usePOSStore = defineStore('pos', () => {
         if (cachedItem) {
           cachedItem.uoms = uoms;
           cachedItem.prices = pricesMap;
+          cachedItem.price_list_name = priceList;
           const writeTx = db.transaction('items', 'readwrite');
           const writeStore = writeTx.objectStore('items');
           writeStore.put(cachedItem);
         }
         return { uoms, prices: pricesMap };
+      }
+
+      // 3. Fallback for offline mode if they were not cached
+      if (cachedItem) {
+        const uoms = cachedItem.uoms || [
+          { uom: cachedItem.uom || cachedItem.stock_uom, conversion_factor: 1 }
+        ];
+        const prices: Record<string, number> = {};
+        if (cachedItem.price_list_name === priceList && cachedItem.prices) {
+          Object.assign(prices, cachedItem.prices);
+        } else {
+          prices[cachedItem.uom || cachedItem.stock_uom] = cachedItem.price_list_rate || 0;
+        }
+        return { uoms, prices };
       }
     } catch (e) {
       console.warn('[POSStore] Failed to fetch item details offline data:', e);

@@ -231,9 +231,7 @@ function onUOMChanged(newUom: string) {
   if (uomPrices.value[newUom] !== undefined) {
     newPriceListRate = uomPrices.value[newUom];
   } else {
-    const baseUom = posItem.value?.stock_uom || item.value.uom;
-    const basePrice = uomPrices.value[baseUom] ?? posItem.value?.price_list_rate ?? item.value.rate;
-    newPriceListRate = basePrice * factor;
+    newPriceListRate = 0;
   }
 
   pos.updateCartItemUOM(item.value.item_code, newUom, item.value.batch_no);

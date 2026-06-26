@@ -215,6 +215,14 @@ onMounted(() => {
   clockTimer = setInterval(updateClock, 1000);
   sync.refreshPendingCount();
   window.addEventListener('beforeunload', handleBeforeUnload);
+
+  // If session is restored, trigger loading of items and customers from IndexedDB/Cache
+  if (pos.items.length === 0) {
+    pos.loadItems(true);
+  }
+  if (pos.customers.length === 0) {
+    pos.loadCustomers('');
+  }
 });
 
 onBeforeUnmount(() => {
