@@ -113,6 +113,8 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
       } : {}),
       ...(item.batch_no ? { batch_no: item.batch_no } : {}),
       ...(item.serial_no ? { serial_no: item.serial_no } : {}),
+      ...(item.conversion_factor ? { conversion_factor: item.conversion_factor } : {}),
+      ...(item.price_list_rate ? { price_list_rate: item.price_list_rate } : {}),
     })),
     payments: payments
       .filter((p) => p.amount > 0)

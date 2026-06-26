@@ -39,6 +39,8 @@ export interface CartItem {
   warehouse?: string;
   item_tax_template?: string;
   item_tax_rate?: string;
+  conversion_factor?: number;
+  price_list_rate?: number;
 }
 
 export interface Customer {
@@ -95,6 +97,13 @@ export const usePOSStore = defineStore('pos', () => {
   const selectedCustomer = ref<Customer | null>(null);
   const cartDiscount = ref<number>(0); // global discount %
   const additionalDiscount = ref<number>(0); // flat amount
+  const selectedItemIdx = ref<number | null>(null);
+  const warehouses = ref<string[]>([]);
+
+  const selectedCartItem = computed(() => {
+    if (selectedItemIdx.value === null) return null;
+    return cartItems.value[selectedItemIdx.value] || null;
+  });
 
   // ─── Item Groups ─────────────────────────────────────────────────────────
 
@@ -173,8 +182,6 @@ export const usePOSStore = defineStore('pos', () => {
     selectedCustomer.value = customer;
   }
 
-  // ─── Cart ─────────────────────────────────────────────────────────────────
-
   function addToCart(item: POSItem) {
     const itemBatchNo = item.batch_no || '';
     const existing = cartItems.value.find(
@@ -196,11 +203,25 @@ export const usePOSStore = defineStore('pos', () => {
         warehouse: session.value?.warehouse || '',
         item_tax_template: item.item_tax_template,
         item_tax_rate: item.item_tax_rate,
+        conversion_factor: 1,
+        price_list_rate: item.price_list_rate || 0,
       });
     }
   }
 
+  function selectCartItem(idx: number | null) {
+    selectedItemIdx.value = idx;
+  }
+
   function removeFromCart(item_code: string, batch_no: string = '') {
+    const indexToRemove = cartItems.value.findIndex(
+      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+    );
+    if (indexToRemove !== -1 && selectedItemIdx.value === indexToRemove) {
+      selectedItemIdx.value = null;
+    } else if (indexToRemove !== -1 && selectedItemIdx.value !== null && indexToRemove < selectedItemIdx.value) {
+      selectedItemIdx.value -= 1;
+    }
     cartItems.value = cartItems.value.filter(
       (ci) => !(ci.item_code === item_code && ci.batch_no === batch_no)
     );
@@ -237,11 +258,39 @@ export const usePOSStore = defineStore('pos', () => {
     item.amount = item.qty * item.rate * (1 - pct / 100);
   }
 
+  function updateCartItemWarehouse(item_code: string, warehouse: string, batch_no: string = '') {
+    const item = cartItems.value.find(
+      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+    );
+    if (item) {
+      item.warehouse = warehouse;
+    }
+  }
+
+  function updateCartItemUOM(item_code: string, uom: string, batch_no: string = '') {
+    const item = cartItems.value.find(
+      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+    );
+    if (item) {
+      item.uom = uom;
+    }
+  }
+
+  function updateCartItemConversionFactor(item_code: string, factor: number, batch_no: string = '') {
+    const item = cartItems.value.find(
+      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+    );
+    if (item) {
+      item.conversion_factor = factor;
+    }
+  }
+
   function clearCart() {
     cartItems.value = [];
     selectedCustomer.value = null;
     cartDiscount.value = 0;
     additionalDiscount.value = 0;
+    selectedItemIdx.value = null;
   }
 
   // ─── Computed Totals ─────────────────────────────────────────────────────
@@ -396,6 +445,29 @@ export const usePOSStore = defineStore('pos', () => {
       payments,
       invoice_type: invoiceType,
     };
+
+    // Load and cache warehouses list
+    try {
+      if (network.isOnline) {
+        const whList = await call('frappe.client.get_list', {
+          doctype: 'Warehouse',
+          fields: ['name'],
+          limit_page_length: 500,
+        });
+        warehouses.value = (whList || []).map((w: any) => w.name);
+        localStorage.setItem('pos_warehouses', JSON.stringify(warehouses.value));
+      } else {
+        const cachedWh = localStorage.getItem('pos_warehouses');
+        if (cachedWh) warehouses.value = JSON.parse(cachedWh);
+      }
+    } catch (e) {
+      console.warn('[POSStore] Failed to load warehouses list', e);
+    }
+    // Ensure default warehouse is in the list
+    if (profileData.warehouse && !warehouses.value.includes(profileData.warehouse)) {
+      warehouses.value.push(profileData.warehouse);
+    }
+
     // Pre-load data
     await Promise.all([loadItems(true), loadCustomers('')]);
   }
@@ -406,6 +478,7 @@ export const usePOSStore = defineStore('pos', () => {
     clearCart();
     items.value = [];
     customers.value = [];
+    warehouses.value = [];
   }
 
   return {
@@ -419,7 +492,10 @@ export const usePOSStore = defineStore('pos', () => {
     loadCustomers, selectCustomer,
     // Cart
     cartItems, selectedCustomer, cartDiscount, additionalDiscount,
-    addToCart, removeFromCart, updateQty, updateRate, updateDiscount, clearCart,
+    selectedItemIdx, warehouses, selectedCartItem,
+    addToCart, removeFromCart, updateQty, updateRate, updateDiscount,
+    selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor,
+    clearCart,
     // Totals
     subtotal, totalDiscount, grandTotal, cartCount, taxes, totalTaxes,
   };

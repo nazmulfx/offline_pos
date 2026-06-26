@@ -92,10 +92,15 @@
     <OfflineBanner />
 
     <!-- Main Layout -->
-    <div class="pos-main">
+    <div class="pos-main" :class="{ 'pos-main--details-open': pos.selectedCartItem }">
       <!-- Left: Item Selector -->
       <div class="pos-main__items">
         <ItemSelector />
+      </div>
+
+      <!-- Middle: Item Details -->
+      <div v-if="pos.selectedCartItem" class="pos-main__details">
+        <ItemDetails />
       </div>
 
       <!-- Right: Cart -->
@@ -168,6 +173,7 @@ import { useTheme } from '../composables/useTheme';
 import OfflineBanner from '../components/pos/OfflineBanner.vue';
 import ItemSelector from '../components/pos/ItemSelector.vue';
 import Cart from '../components/pos/Cart.vue';
+import ItemDetails from '../components/pos/ItemDetails.vue';
 import PaymentModal from '../components/pos/PaymentModal.vue';
 import POSClosingModal from '../components/pos/POSClosingModal.vue';
 import OfflineSyncPanel from '../components/pos/OfflineSyncPanel.vue';
@@ -431,9 +437,18 @@ async function handleLogout() {
   grid-template-columns: 1fr 360px;
   flex: 1;
   overflow: hidden;
+  transition: grid-template-columns 0.3s ease;
+}
+.pos-main--details-open {
+  grid-template-columns: 1fr 450px 360px;
 }
 .pos-main__items {
   padding: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.pos-main__details {
   overflow: hidden;
   display: flex;
   flex-direction: column;

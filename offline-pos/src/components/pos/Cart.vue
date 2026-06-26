@@ -35,9 +35,9 @@
         v-for="(item, idx) in pos.cartItems"
         :key="`${item.item_code}-${item.batch_no}-${idx}`"
         :item="item"
-        :is-active="activeIdx === idx"
+        :is-active="pos.selectedItemIdx === idx"
         :currency="pos.session?.currency"
-        @select="activeIdx = idx"
+        @select="pos.selectCartItem(idx)"
         @remove="pos.removeFromCart(item.item_code, item.batch_no)"
         @update-qty="(qty) => pos.updateQty(item.item_code, qty, item.batch_no)"
       />
@@ -56,7 +56,7 @@
     </div>
 
     <!-- ── NumPad ──────────────────────────────── -->
-    <div v-if="activeIdx !== null && pos.cartItems[activeIdx]" class="cart__numpad">
+    <div v-if="pos.selectedItemIdx !== null && pos.cartItems[pos.selectedItemIdx]" class="cart__numpad">
       <NumberPad @update="onNumpadUpdate" />
     </div>
 
@@ -108,7 +108,6 @@ import NumberPad from './NumberPad.vue';
 
 const pos = usePOSStore();
 const emit = defineEmits<{ (e: 'checkout'): void }>();
-const activeIdx = ref<number | null>(null);
 
 const canCheckout = computed(
   () => pos.cartItems.length > 0 && !!pos.selectedCustomer && pos.grandTotal > 0
@@ -125,13 +124,12 @@ function fmt(v: number) {
 function confirmClear() {
   if (confirm('Clear all cart items?')) {
     pos.clearCart();
-    activeIdx.value = null;
   }
 }
 
 function onNumpadUpdate(mode: string, value: string) {
-  if (activeIdx.value === null) return;
-  const item = pos.cartItems[activeIdx.value];
+  if (pos.selectedItemIdx === null) return;
+  const item = pos.cartItems[pos.selectedItemIdx];
   if (!item) return;
   const n = parseFloat(value) || 0;
   if (mode === 'qty') pos.updateQty(item.item_code, n, item.batch_no);
