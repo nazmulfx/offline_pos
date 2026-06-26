@@ -177,16 +177,20 @@ const item = computed(() => pos.selectedCartItem);
 const imgError = ref(false);
 const activeField = ref<'qty' | 'rate' | 'discount' | null>('qty');
 const uomConversionFactors = ref<Array<{ uom: string; conversion_factor: number }>>([]);
+const uomPrices = ref<Record<string, number>>({});
 
 watch(
   () => item.value?.item_code,
   async (newCode) => {
     if (newCode) {
       activeField.value = 'qty';
-      uomConversionFactors.value = await pos.fetchItemUOMConversionFactors(newCode);
+      const data = await pos.fetchItemDetailsOfflineData(newCode);
+      uomConversionFactors.value = data.uoms;
+      uomPrices.value = data.prices;
     } else {
       activeField.value = null;
       uomConversionFactors.value = [];
+      uomPrices.value = {};
     }
   },
   { immediate: true }
@@ -222,8 +226,19 @@ function onUOMChanged(newUom: string) {
   } else if (newUom === posItem.value?.stock_uom) {
     factor = 1;
   }
+
+  let newPriceListRate = 0;
+  if (uomPrices.value[newUom] !== undefined) {
+    newPriceListRate = uomPrices.value[newUom];
+  } else {
+    const baseUom = posItem.value?.stock_uom || item.value.uom;
+    const basePrice = uomPrices.value[baseUom] ?? posItem.value?.price_list_rate ?? item.value.rate;
+    newPriceListRate = basePrice * factor;
+  }
+
   pos.updateCartItemUOM(item.value.item_code, newUom, item.value.batch_no);
   pos.updateCartItemConversionFactor(item.value.item_code, factor, item.value.batch_no);
+  pos.updateCartItemPrice(item.value.item_code, newPriceListRate, item.value.batch_no);
 }
 
 function formatCurrency(value: number | undefined): string {

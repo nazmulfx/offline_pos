@@ -298,6 +298,17 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
+  function updateCartItemPrice(item_code: string, priceListRate: number, batch_no: string = '') {
+    const item = cartItems.value.find(
+      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+    );
+    if (!item) return;
+    item.price_list_rate = priceListRate;
+    const pct = item.discount_percentage || 0;
+    item.rate = priceListRate * (1 - pct / 100);
+    item.amount = item.qty * item.rate;
+  }
+
   function clearCart() {
     cartItems.value = [];
     selectedCustomer.value = null;
@@ -520,7 +531,11 @@ export const usePOSStore = defineStore('pos', () => {
     await Promise.all([loadItems(true), loadCustomers('')]);
   }
 
-  async function fetchItemUOMConversionFactors(itemCode: string): Promise<Array<{ uom: string; conversion_factor: number }>> {
+  async function fetchItemDetailsOfflineData(itemCode: string): Promise<{
+    uoms: Array<{ uom: string; conversion_factor: number }>;
+    prices: Record<string, number>;
+  }> {
+    const priceList = session.value?.price_list || 'Standard Selling';
     // 1. Try to read from IndexedDB items cache
     try {
       const db = await openPOSDB();
@@ -532,29 +547,56 @@ export const usePOSStore = defineStore('pos', () => {
         req.onerror = () => resolve(null);
       });
 
-      if (cachedItem && cachedItem.uoms && cachedItem.uoms.length > 0) {
-        return cachedItem.uoms;
+      if (cachedItem && cachedItem.uoms && cachedItem.prices) {
+        return {
+          uoms: cachedItem.uoms,
+          prices: cachedItem.prices,
+        };
       }
 
-      // 2. If online and no cached uoms, fetch the full item document from ERPNext
+      // 2. If online, fetch from ERPNext
       if (network.isOnline) {
         const itemDoc = await call('frappe.client.get', {
           doctype: 'Item',
           name: itemCode,
         });
         const uoms = itemDoc?.uoms || [];
+
+        const priceRecords = await call('frappe.client.get_list', {
+          doctype: 'Item Price',
+          filters: {
+            item_code: itemCode,
+            price_list: priceList,
+          },
+          fields: ['uom', 'price_list_rate'],
+          limit_page_length: 100,
+        }) || [];
+
+        const pricesMap: Record<string, number> = {};
+        if (cachedItem) {
+          if (cachedItem.price_list_rate !== undefined) {
+            pricesMap[cachedItem.uom || cachedItem.stock_uom] = cachedItem.price_list_rate;
+          }
+        }
+        priceRecords.forEach((pr: any) => {
+          if (pr.uom && pr.price_list_rate !== undefined) {
+            pricesMap[pr.uom] = pr.price_list_rate;
+          }
+        });
+
         if (cachedItem) {
           cachedItem.uoms = uoms;
+          cachedItem.prices = pricesMap;
           const writeTx = db.transaction('items', 'readwrite');
           const writeStore = writeTx.objectStore('items');
           writeStore.put(cachedItem);
         }
-        return uoms;
+        return { uoms, prices: pricesMap };
       }
     } catch (e) {
-      console.warn('[POSStore] Failed to fetch UOM conversion factors:', e);
+      console.warn('[POSStore] Failed to fetch item details offline data:', e);
     }
-    return [];
+    return { uoms: [], prices: {} };
   }
 
 
@@ -579,8 +621,8 @@ export const usePOSStore = defineStore('pos', () => {
     cartItems, selectedCustomer, cartDiscount, additionalDiscount, discountType,
     selectedItemIdx, warehouses, selectedCartItem,
     addToCart, removeFromCart, updateQty, updateRate, updateDiscount,
-    selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor,
-    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemUOMConversionFactors,
+    selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor, updateCartItemPrice,
+    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData,
     // Totals
     subtotal, totalDiscount, grandTotal, cartCount, taxes, totalTaxes,
   };
