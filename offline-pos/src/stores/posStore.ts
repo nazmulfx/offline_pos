@@ -22,6 +22,7 @@ export interface POSItem {
   currency: string;
   batch_no?: string;
   barcode?: string;
+  is_stock_item?: number;
   item_tax_template?: string;
   item_tax_rate?: string;
 }
@@ -41,6 +42,7 @@ export interface CartItem {
   item_tax_rate?: string;
   conversion_factor?: number;
   price_list_rate?: number;
+  is_stock_item?: number;
 }
 
 export interface Customer {
@@ -123,6 +125,17 @@ export const usePOSStore = defineStore('pos', () => {
   );
   const selectedItemIdx = ref<number | null>(null);
   const warehouses = ref<string[]>([]);
+
+  // ─── Designed Alert Modal ──────────────────────────────────────────────────
+  const activeAlert = ref<{ title: string; message: string } | null>(null);
+
+  function showAlert(title: string, message: string) {
+    activeAlert.value = { title, message };
+  }
+
+  function closeAlert() {
+    activeAlert.value = null;
+  }
 
   // Watchers to persist state
   watch(session, (newVal) => {
@@ -313,11 +326,20 @@ export const usePOSStore = defineStore('pos', () => {
   }
 
   function addToCart(item: POSItem) {
+    if (item.is_stock_item && (item.actual_qty === undefined || item.actual_qty <= 0)) {
+      showAlert("Out of Stock", "stock is available to this warehouse is zero. can't add to cart");
+      return;
+    }
+
     const itemBatchNo = item.batch_no || '';
     const existing = cartItems.value.find(
       (ci) => ci.item_code === item.item_code && ci.batch_no === itemBatchNo
     );
     if (existing) {
+      if (item.is_stock_item && existing.qty + 1 > item.actual_qty) {
+        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${item.actual_qty} stock available.`);
+        return;
+      }
       existing.qty += 1;
       existing.amount = existing.qty * existing.rate;
     } else {
@@ -335,6 +357,7 @@ export const usePOSStore = defineStore('pos', () => {
         item_tax_rate: item.item_tax_rate,
         conversion_factor: 1,
         price_list_rate: item.price_list_rate || 0,
+        is_stock_item: item.is_stock_item ? 1 : 0,
       });
     }
   }
@@ -366,6 +389,15 @@ export const usePOSStore = defineStore('pos', () => {
       removeFromCart(item_code, batch_no);
       return;
     }
+
+    const catalogItem = items.value.find((i) => i.item_code === item_code);
+    if (catalogItem && catalogItem.is_stock_item) {
+      if (qty > catalogItem.actual_qty) {
+        showAlert("Stock Limit Exceeded", `Cannot set quantity to ${qty}. Only ${catalogItem.actual_qty} stock available.`);
+        return;
+      }
+    }
+
     item.qty = qty;
     item.amount = qty * item.rate;
   }
@@ -743,6 +775,37 @@ export const usePOSStore = defineStore('pos', () => {
   }
 
 
+  async function decrementStock(itemsToDecrement: CartItem[]) {
+    try {
+      const db = await openPOSDB();
+      const tx = db.transaction('items', 'readwrite');
+      const store = tx.objectStore('items');
+
+      for (const cartItem of itemsToDecrement) {
+        const matchedItem = items.value.find((i) => i.item_code === cartItem.item_code);
+        if (matchedItem && matchedItem.is_stock_item) {
+          matchedItem.actual_qty = Math.max(0, matchedItem.actual_qty - cartItem.qty);
+
+          const cachedItem = await new Promise<any>((resolve) => {
+            const req = store.get(cartItem.item_code);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+          });
+          if (cachedItem) {
+            cachedItem.actual_qty = Math.max(0, (cachedItem.actual_qty || 0) - cartItem.qty);
+            store.put(cachedItem);
+          }
+        }
+      }
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) {
+      console.warn('[POSStore] Failed to decrement local stock:', e);
+    }
+  }
+
   function clearSession() {
     session.value = null;
     clearCart();
@@ -765,7 +828,9 @@ export const usePOSStore = defineStore('pos', () => {
     selectedItemIdx, warehouses, selectedCartItem,
     addToCart, removeFromCart, updateQty, updateRate, updateDiscount,
     selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor, updateCartItemPrice,
-    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData,
+    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData, decrementStock,
+    // designed alert
+    activeAlert, showAlert, closeAlert,
     // Totals
     subtotal, totalDiscount, grandTotal, cartCount, taxes, totalTaxes,
   };

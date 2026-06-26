@@ -238,11 +238,12 @@ async function submitPayment() {
       if (result.offline) {
         await sync.refreshPendingCount();
       }
+      await pos.decrementStock(pos.cartItems);
       pos.clearCart();
       emit('success', result.invoiceName || `OFFLINE-${result.localId}`, !!result.offline);
       close();
     } else {
-      alert(`Error: ${result.error}`);
+      pos.showAlert('Payment Error', result.error || 'Failed to submit invoice');
     }
   } finally {
     isSubmitting.value = false;

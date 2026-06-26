@@ -271,7 +271,7 @@ async function continueWithEntry() {
     router.push({ name: 'POS' });
   } catch (err) {
     console.error('[POSOpening] continueWithEntry error:', err);
-    alert('Failed to load POS session. Please try again.');
+    pos.showAlert('Session Error', 'Failed to load POS session. Please try again.');
   } finally {
     isLoading.value = false;
   }

@@ -1,6 +1,7 @@
 <template>
 	<div class="pos-app">
 		<router-view />
+    <POSAlertModal />
 	</div>
 </template>
 
@@ -9,6 +10,7 @@ import { onMounted, onUnmounted } from 'vue';
 import { useNetworkStore } from './stores/networkStore';
 import { useSyncStore } from './stores/syncStore';
 import { usePOSStore } from './stores/posStore';
+import POSAlertModal from './components/pos/POSAlertModal.vue';
 
 const network = useNetworkStore();
 const sync = useSyncStore();
