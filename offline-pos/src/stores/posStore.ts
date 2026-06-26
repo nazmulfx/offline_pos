@@ -307,16 +307,12 @@ export const usePOSStore = defineStore('pos', () => {
   // ─── Computed Totals ─────────────────────────────────────────────────────
 
   const subtotal = computed(() =>
-    cartItems.value.reduce((sum, ci) => sum + ci.qty * (ci.price_list_rate || ci.rate), 0)
+    cartItems.value.reduce((sum, ci) => sum + ci.qty * ci.rate, 0)
   );
 
   const totalDiscount = computed(() => {
-    const itemDiscounts = cartItems.value.reduce(
-      (sum, ci) => sum + ci.qty * (ci.price_list_rate || ci.rate) * (ci.discount_percentage / 100),
-      0
-    );
     const globalDisc = (subtotal.value * cartDiscount.value) / 100;
-    return itemDiscounts + globalDisc + additionalDiscount.value;
+    return globalDisc + additionalDiscount.value;
   });
 
   const taxes = computed(() => {

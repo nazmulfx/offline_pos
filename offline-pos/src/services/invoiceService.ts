@@ -107,6 +107,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
       uom: item.uom,
       warehouse: item.warehouse || session.warehouse,
       discount_percentage: item.discount_percentage || 0,
+      discount_amount: (item.price_list_rate || item.rate) - item.rate,
       ...(!hasProfileTaxes ? {
         item_tax_template: item.item_tax_template || null,
         item_tax_rate: typeof item.item_tax_rate === 'object' ? JSON.stringify(item.item_tax_rate) : (item.item_tax_rate || '{}')

@@ -55,11 +55,6 @@
       <span class="cart__empty-hint">Select items from the left</span>
     </div>
 
-    <!-- ── NumPad ──────────────────────────────── -->
-    <div v-if="pos.selectedItemIdx !== null && pos.cartItems[pos.selectedItemIdx]" class="cart__numpad">
-      <NumberPad @update="onNumpadUpdate" />
-    </div>
-
     <div class="cart__flex" />
 
     <!-- ── Totals ──────────────────────────────── -->
@@ -104,7 +99,6 @@ import { ref, computed } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
 import CustomerSelector from './CustomerSelector.vue';
 import CartItem from './CartItem.vue';
-import NumberPad from './NumberPad.vue';
 
 const pos = usePOSStore();
 const emit = defineEmits<{ (e: 'checkout'): void }>();
@@ -125,16 +119,6 @@ function confirmClear() {
   if (confirm('Clear all cart items?')) {
     pos.clearCart();
   }
-}
-
-function onNumpadUpdate(mode: string, value: string) {
-  if (pos.selectedItemIdx === null) return;
-  const item = pos.cartItems[pos.selectedItemIdx];
-  if (!item) return;
-  const n = parseFloat(value) || 0;
-  if (mode === 'qty') pos.updateQty(item.item_code, n, item.batch_no);
-  else if (mode === 'rate') pos.updateRate(item.item_code, n, item.batch_no);
-  else if (mode === 'discount') pos.updateDiscount(item.item_code, n, item.batch_no);
 }
 </script>
 

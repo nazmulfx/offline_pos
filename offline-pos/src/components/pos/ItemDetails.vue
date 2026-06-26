@@ -50,7 +50,9 @@
             type="number"
             :value="item.qty"
             @input="pos.updateQty(item.item_code, parseFloat(($event.target as HTMLInputElement).value) || 0, item.batch_no)"
+            @focus="activeField = 'qty'"
             class="item-details__input"
+            :class="{ 'item-details__input--active': activeField === 'qty' }"
             step="0.001"
             min="0"
           />
@@ -80,7 +82,9 @@
               type="number"
               :value="item.rate"
               @input="pos.updateRate(item.item_code, parseFloat(($event.target as HTMLInputElement).value) || 0, item.batch_no)"
+              @focus="activeField = 'rate'"
               class="item-details__input item-details__input--currency"
+              :class="{ 'item-details__input--active': activeField === 'rate' }"
               step="0.01"
               min="0"
             />
@@ -94,7 +98,9 @@
             type="number"
             :value="item.conversion_factor ?? 1"
             @input="pos.updateCartItemConversionFactor(item.item_code, parseFloat(($event.target as HTMLInputElement).value) || 1, item.batch_no)"
+            @focus="activeField = 'conversion_factor'"
             class="item-details__input"
+            :class="{ 'item-details__input--active': activeField === 'conversion_factor' }"
             step="0.001"
             min="0"
           />
@@ -107,7 +113,9 @@
             type="number"
             :value="parseFloat((item.discount_percentage || 0).toFixed(2))"
             @input="pos.updateDiscount(item.item_code, parseFloat(($event.target as HTMLInputElement).value) || 0, item.batch_no)"
+            @focus="activeField = 'discount'"
             class="item-details__input"
+            :class="{ 'item-details__input--active': activeField === 'discount' }"
             step="0.01"
             min="0"
             max="100"
@@ -150,17 +158,40 @@
           </div>
         </div>
       </div>
+
+      <!-- Number Pad Section -->
+      <div class="item-details__numpad">
+        <NumberPad
+          hide-header
+          hide-modes
+          :initial-mode="activeField || 'qty'"
+          @update="onNumpadUpdate"
+        />
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
+import NumberPad from './NumberPad.vue';
 
 const pos = usePOSStore();
 const item = computed(() => pos.selectedCartItem);
 const imgError = ref(false);
+const activeField = ref<'qty' | 'rate' | 'discount' | 'conversion_factor' | null>('qty');
+
+watch(
+  () => item.value?.item_code,
+  (newCode) => {
+    if (newCode) {
+      activeField.value = 'qty';
+    } else {
+      activeField.value = null;
+    }
+  }
+);
 
 const posItem = computed(() => {
   if (!item.value) return null;
@@ -179,6 +210,15 @@ function formatCurrency(value: number | undefined): string {
     currency: pos.session?.currency || 'BDT',
     minimumFractionDigits: 0,
   }).format(value);
+}
+
+function onNumpadUpdate(mode: string, value: string) {
+  if (!item.value) return;
+  const n = parseFloat(value) || 0;
+  if (mode === 'qty') pos.updateQty(item.value.item_code, n, item.value.batch_no);
+  else if (mode === 'rate') pos.updateRate(item.value.item_code, n, item.value.batch_no);
+  else if (mode === 'discount') pos.updateDiscount(item.value.item_code, n, item.value.batch_no);
+  else if (mode === 'conversion_factor') pos.updateCartItemConversionFactor(item.value.item_code, n, item.value.batch_no);
 }
 </script>
 
@@ -342,6 +382,12 @@ function formatCurrency(value: number | undefined): string {
   background: var(--pos-bg);
 }
 
+.item-details__input--active {
+  border-color: var(--pos-accent) !important;
+  background: var(--pos-surface) !important;
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.2);
+}
+
 .item-details__input-wrap {
   position: relative;
   display: flex;
@@ -359,5 +405,9 @@ function formatCurrency(value: number | undefined): string {
 
 .item-details__input--currency {
   padding-left: 44px;
+}
+
+.item-details__numpad {
+  margin-top: 10px;
 }
 </style>
