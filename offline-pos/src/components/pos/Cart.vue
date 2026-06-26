@@ -59,6 +59,38 @@
 
     <!-- ── Totals ──────────────────────────────── -->
     <div v-if="pos.cartItems.length > 0" class="cart__totals">
+      <!-- Invoice-level Discount Fields -->
+      <div class="cart__discount-inputs">
+        <div class="cart__discount-input-field">
+          <label class="cart__discount-label">Disc (%)</label>
+          <input
+            type="number"
+            :value="pos.cartDiscount"
+            @input="pos.setAdditionalDiscountPercent(parseFloat(($event.target as HTMLInputElement).value) || 0)"
+            class="cart__discount-input"
+            step="0.01"
+            min="0"
+            max="100"
+            placeholder="0"
+          />
+        </div>
+        <div class="cart__discount-input-field">
+          <label class="cart__discount-label">Disc Amt</label>
+          <div class="cart__discount-prefix-wrap">
+            <span class="cart__discount-prefix">{{ currencySymbol }}</span>
+            <input
+              type="number"
+              :value="pos.additionalDiscount"
+              @input="pos.setAdditionalDiscountAmount(parseFloat(($event.target as HTMLInputElement).value) || 0)"
+              class="cart__discount-input cart__discount-input--amt"
+              step="1"
+              min="0"
+              placeholder="0"
+            />
+          </div>
+        </div>
+      </div>
+
       <div class="cart__row">
         <span>Subtotal</span>
         <span>{{ fmt(pos.subtotal) }}</span>
@@ -102,6 +134,11 @@ import CartItem from './CartItem.vue';
 
 const pos = usePOSStore();
 const emit = defineEmits<{ (e: 'checkout'): void }>();
+
+const currencySymbol = computed(() => {
+  const curr = pos.session?.currency || 'BDT';
+  return curr === 'BDT' ? '৳' : curr;
+});
 
 const canCheckout = computed(
   () => pos.cartItems.length > 0 && !!pos.selectedCustomer && pos.grandTotal > 0
@@ -303,5 +340,58 @@ function confirmClear() {
   opacity: 0.3;
   cursor: not-allowed;
   box-shadow: none;
+}
+
+/* ── Invoice discount styling ─────────────────────── */
+.cart__discount-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--pos-border);
+}
+.cart__discount-input-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cart__discount-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--pos-text-muted);
+  letter-spacing: 0.5px;
+}
+.cart__discount-input {
+  width: 100%;
+  background: var(--pos-bg);
+  border: 1px solid var(--pos-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: var(--pos-text);
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+.cart__discount-input:focus {
+  border-color: var(--pos-accent);
+}
+.cart__discount-prefix-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.cart__discount-prefix {
+  position: absolute;
+  left: 10px;
+  font-size: 12px;
+  color: var(--pos-text-muted);
+  pointer-events: none;
+}
+.cart__discount-input--amt {
+  padding-left: 22px;
 }
 </style>

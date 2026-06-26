@@ -3,7 +3,7 @@
  * Manages: session, cart, items, customers, item groups
  */
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
 import { fetchItems } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
@@ -97,6 +97,7 @@ export const usePOSStore = defineStore('pos', () => {
   const selectedCustomer = ref<Customer | null>(null);
   const cartDiscount = ref<number>(0); // global discount %
   const additionalDiscount = ref<number>(0); // flat amount
+  const discountType = ref<'percent' | 'amount'>('percent');
   const selectedItemIdx = ref<number | null>(null);
   const warehouses = ref<string[]>([]);
 
@@ -311,14 +312,13 @@ export const usePOSStore = defineStore('pos', () => {
   );
 
   const totalDiscount = computed(() => {
-    const globalDisc = (subtotal.value * cartDiscount.value) / 100;
-    return globalDisc + additionalDiscount.value;
+    return additionalDiscount.value;
   });
 
   const taxes = computed(() => {
     // If POS Profile has taxes_and_charges template set, use it for all items
     if (session.value?.taxes_and_charges && session.value?.taxes_and_charges_data?.length) {
-      const netTotal = subtotal.value - totalDiscount.value;
+      const netTotal = subtotal.value;
       return session.value.taxes_and_charges_data.map((taxRow: any) => {
         let amt = 0;
         const rate = taxRow.rate || 0;
@@ -341,7 +341,7 @@ export const usePOSStore = defineStore('pos', () => {
     const taxMap: Record<string, { account_head: string; rate: number; tax_amount: number; description: string }> = {};
 
     cartItems.value.forEach((ci) => {
-      const itemNet = ci.qty * ci.rate * (1 - ci.discount_percentage / 100);
+      const itemNet = ci.qty * ci.rate;
 
       let itemTaxRate: Record<string, number> = {};
       if (ci.item_tax_rate) {
@@ -383,6 +383,30 @@ export const usePOSStore = defineStore('pos', () => {
   const cartCount = computed(() =>
     cartItems.value.reduce((sum, ci) => sum + ci.qty, 0)
   );
+
+  function setAdditionalDiscountPercent(val: number) {
+    discountType.value = 'percent';
+    cartDiscount.value = val;
+    additionalDiscount.value = parseFloat(((subtotal.value + totalTaxes.value) * (val / 100)).toFixed(2));
+  }
+
+  function setAdditionalDiscountAmount(val: number) {
+    discountType.value = 'amount';
+    additionalDiscount.value = val;
+    cartDiscount.value = (subtotal.value + totalTaxes.value) > 0
+      ? parseFloat(((val / (subtotal.value + totalTaxes.value)) * 100).toFixed(4))
+      : 0;
+  }
+
+  watch([subtotal, totalTaxes], () => {
+    if (discountType.value === 'percent') {
+      additionalDiscount.value = parseFloat(((subtotal.value + totalTaxes.value) * (cartDiscount.value / 100)).toFixed(2));
+    } else {
+      cartDiscount.value = (subtotal.value + totalTaxes.value) > 0
+        ? parseFloat(((additionalDiscount.value / (subtotal.value + totalTaxes.value)) * 100).toFixed(4))
+        : 0;
+    }
+  });
 
   // ─── Session ─────────────────────────────────────────────────────────────
 
@@ -498,11 +522,11 @@ export const usePOSStore = defineStore('pos', () => {
     customers, customerSearch, customersLoading,
     loadCustomers, selectCustomer,
     // Cart
-    cartItems, selectedCustomer, cartDiscount, additionalDiscount,
+    cartItems, selectedCustomer, cartDiscount, additionalDiscount, discountType,
     selectedItemIdx, warehouses, selectedCartItem,
     addToCart, removeFromCart, updateQty, updateRate, updateDiscount,
     selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor,
-    clearCart,
+    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount,
     // Totals
     subtotal, totalDiscount, grandTotal, cartCount, taxes, totalTaxes,
   };
