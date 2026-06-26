@@ -63,12 +63,11 @@
           <label class="item-details__label">UOM <span class="required">*</span></label>
           <select
             :value="item.uom"
-            @change="pos.updateCartItemUOM(item.item_code, ($event.target as HTMLSelectElement).value, item.batch_no)"
+            @change="onUOMChanged(($event.target as HTMLSelectElement).value)"
             class="item-details__select"
           >
-            <option :value="item.uom">{{ item.uom }}</option>
-            <option v-if="posItem?.stock_uom && posItem.stock_uom !== item.uom" :value="posItem.stock_uom">
-              {{ posItem.stock_uom }}
+            <option v-for="u in availableUoms" :key="u" :value="u">
+              {{ u }}
             </option>
           </select>
         </div>
@@ -97,12 +96,8 @@
           <input
             type="number"
             :value="item.conversion_factor ?? 1"
-            @input="pos.updateCartItemConversionFactor(item.item_code, parseFloat(($event.target as HTMLInputElement).value) || 1, item.batch_no)"
-            @focus="activeField = 'conversion_factor'"
-            class="item-details__input"
-            :class="{ 'item-details__input--active': activeField === 'conversion_factor' }"
-            step="0.001"
-            min="0"
+            readonly
+            class="item-details__input disabled"
           />
         </div>
 
@@ -180,17 +175,21 @@ import NumberPad from './NumberPad.vue';
 const pos = usePOSStore();
 const item = computed(() => pos.selectedCartItem);
 const imgError = ref(false);
-const activeField = ref<'qty' | 'rate' | 'discount' | 'conversion_factor' | null>('qty');
+const activeField = ref<'qty' | 'rate' | 'discount' | null>('qty');
+const uomConversionFactors = ref<Array<{ uom: string; conversion_factor: number }>>([]);
 
 watch(
   () => item.value?.item_code,
-  (newCode) => {
+  async (newCode) => {
     if (newCode) {
       activeField.value = 'qty';
+      uomConversionFactors.value = await pos.fetchItemUOMConversionFactors(newCode);
     } else {
       activeField.value = null;
+      uomConversionFactors.value = [];
     }
-  }
+  },
+  { immediate: true }
 );
 
 const posItem = computed(() => {
@@ -202,6 +201,30 @@ const currencySymbol = computed(() => {
   const curr = pos.session?.currency || 'BDT';
   return curr === 'BDT' ? '৳' : curr;
 });
+
+const availableUoms = computed(() => {
+  const list = new Set<string>();
+  if (item.value?.uom) list.add(item.value.uom);
+  if (posItem.value?.stock_uom) list.add(posItem.value.stock_uom);
+  if (posItem.value?.sales_uom) list.add(posItem.value.sales_uom);
+  uomConversionFactors.value.forEach((row) => {
+    if (row.uom) list.add(row.uom);
+  });
+  return Array.from(list);
+});
+
+function onUOMChanged(newUom: string) {
+  if (!item.value) return;
+  let factor = 1;
+  const match = uomConversionFactors.value.find((f) => f.uom === newUom);
+  if (match) {
+    factor = match.conversion_factor || 1;
+  } else if (newUom === posItem.value?.stock_uom) {
+    factor = 1;
+  }
+  pos.updateCartItemUOM(item.value.item_code, newUom, item.value.batch_no);
+  pos.updateCartItemConversionFactor(item.value.item_code, factor, item.value.batch_no);
+}
 
 function formatCurrency(value: number | undefined): string {
   if (value === undefined || value === null) return '—';
@@ -218,7 +241,6 @@ function onNumpadUpdate(mode: string, value: string) {
   if (mode === 'qty') pos.updateQty(item.value.item_code, n, item.value.batch_no);
   else if (mode === 'rate') pos.updateRate(item.value.item_code, n, item.value.batch_no);
   else if (mode === 'discount') pos.updateDiscount(item.value.item_code, n, item.value.batch_no);
-  else if (mode === 'conversion_factor') pos.updateCartItemConversionFactor(item.value.item_code, n, item.value.batch_no);
 }
 </script>
 

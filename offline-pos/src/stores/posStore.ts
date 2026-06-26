@@ -7,7 +7,7 @@ import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
 import { fetchItems } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
-import { getAllItemGroups } from '../db/posDB';
+import { getAllItemGroups, openPOSDB } from '../db/posDB';
 import call from '../lib/call';
 
 export interface POSItem {
@@ -503,6 +503,43 @@ export const usePOSStore = defineStore('pos', () => {
     await Promise.all([loadItems(true), loadCustomers('')]);
   }
 
+  async function fetchItemUOMConversionFactors(itemCode: string): Promise<Array<{ uom: string; conversion_factor: number }>> {
+    // 1. Try to read from IndexedDB items cache
+    try {
+      const db = await openPOSDB();
+      const tx = db.transaction('items', 'readonly');
+      const store = tx.objectStore('items');
+      const cachedItem = await new Promise<any>((resolve) => {
+        const req = store.get(itemCode);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      });
+
+      if (cachedItem && cachedItem.uoms && cachedItem.uoms.length > 0) {
+        return cachedItem.uoms;
+      }
+
+      // 2. If online and no cached uoms, fetch the full item document from ERPNext
+      if (network.isOnline) {
+        const itemDoc = await call('frappe.client.get', {
+          doctype: 'Item',
+          name: itemCode,
+        });
+        const uoms = itemDoc?.uoms || [];
+        if (cachedItem) {
+          cachedItem.uoms = uoms;
+          const writeTx = db.transaction('items', 'readwrite');
+          const writeStore = writeTx.objectStore('items');
+          writeStore.put(cachedItem);
+        }
+        return uoms;
+      }
+    } catch (e) {
+      console.warn('[POSStore] Failed to fetch UOM conversion factors:', e);
+    }
+    return [];
+  }
+
 
   function clearSession() {
     session.value = null;
@@ -526,7 +563,7 @@ export const usePOSStore = defineStore('pos', () => {
     selectedItemIdx, warehouses, selectedCartItem,
     addToCart, removeFromCart, updateQty, updateRate, updateDiscount,
     selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor,
-    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount,
+    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemUOMConversionFactors,
     // Totals
     subtotal, totalDiscount, grandTotal, cartCount, taxes, totalTaxes,
   };
