@@ -105,7 +105,7 @@
           <label class="item-details__label">Discount (%)</label>
           <input
             type="number"
-            :value="item.discount_percentage"
+            :value="parseFloat((item.discount_percentage || 0).toFixed(2))"
             @input="pos.updateDiscount(item.item_code, parseFloat(($event.target as HTMLInputElement).value) || 0, item.batch_no)"
             class="item-details__input"
             step="0.01"
@@ -116,14 +116,13 @@
 
         <!-- Warehouse -->
         <div class="item-details__field">
-          <label class="item-details__label">Warehouse <span class="required">*</span></label>
-          <select
+          <label class="item-details__label">Warehouse</label>
+          <input
+            type="text"
             :value="item.warehouse"
-            @change="pos.updateCartItemWarehouse(item.item_code, ($event.target as HTMLSelectElement).value, item.batch_no)"
-            class="item-details__select"
-          >
-            <option v-for="wh in pos.warehouses" :key="wh" :value="wh">{{ wh }}</option>
-          </select>
+            disabled
+            class="item-details__input disabled"
+          />
         </div>
 
         <!-- Qty (Warehouse) -->

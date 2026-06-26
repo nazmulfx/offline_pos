@@ -37,7 +37,7 @@
 
     <!-- Discount bar (shown when discount > 0) -->
     <div v-if="item.discount_percentage > 0" class="ci__disc">
-      <span>{{ item.discount_percentage }}% off</span>
+      <span>{{ parseFloat(item.discount_percentage.toFixed(2)) }}% off</span>
     </div>
 
   </div>

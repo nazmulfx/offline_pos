@@ -189,7 +189,7 @@ export const usePOSStore = defineStore('pos', () => {
     );
     if (existing) {
       existing.qty += 1;
-      existing.amount = existing.qty * existing.rate * (1 - existing.discount_percentage / 100);
+      existing.amount = existing.qty * existing.rate;
     } else {
       cartItems.value.push({
         item_code: item.item_code,
@@ -237,7 +237,7 @@ export const usePOSStore = defineStore('pos', () => {
       return;
     }
     item.qty = qty;
-    item.amount = qty * item.rate * (1 - item.discount_percentage / 100);
+    item.amount = qty * item.rate;
   }
 
   function updateRate(item_code: string, rate: number, batch_no: string = '') {
@@ -246,7 +246,16 @@ export const usePOSStore = defineStore('pos', () => {
     );
     if (!item) return;
     item.rate = rate;
-    item.amount = item.qty * rate * (1 - item.discount_percentage / 100);
+    const priceListRate = item.price_list_rate || rate;
+    if (priceListRate > 0 && rate < priceListRate) {
+      item.discount_percentage = ((priceListRate - rate) / priceListRate) * 100;
+    } else {
+      item.discount_percentage = 0;
+      if (rate > priceListRate) {
+        item.price_list_rate = rate;
+      }
+    }
+    item.amount = item.qty * rate;
   }
 
   function updateDiscount(item_code: string, pct: number, batch_no: string = '') {
@@ -255,7 +264,9 @@ export const usePOSStore = defineStore('pos', () => {
     );
     if (!item) return;
     item.discount_percentage = pct;
-    item.amount = item.qty * item.rate * (1 - pct / 100);
+    const priceListRate = item.price_list_rate || item.rate;
+    item.rate = priceListRate * (1 - pct / 100);
+    item.amount = item.qty * item.rate;
   }
 
   function updateCartItemWarehouse(item_code: string, warehouse: string, batch_no: string = '') {
@@ -296,12 +307,12 @@ export const usePOSStore = defineStore('pos', () => {
   // ─── Computed Totals ─────────────────────────────────────────────────────
 
   const subtotal = computed(() =>
-    cartItems.value.reduce((sum, ci) => sum + ci.qty * ci.rate, 0)
+    cartItems.value.reduce((sum, ci) => sum + ci.qty * (ci.price_list_rate || ci.rate), 0)
   );
 
   const totalDiscount = computed(() => {
     const itemDiscounts = cartItems.value.reduce(
-      (sum, ci) => sum + ci.qty * ci.rate * (ci.discount_percentage / 100),
+      (sum, ci) => sum + ci.qty * (ci.price_list_rate || ci.rate) * (ci.discount_percentage / 100),
       0
     );
     const globalDisc = (subtotal.value * cartDiscount.value) / 100;
