@@ -98,7 +98,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     due_date: today(),
     additional_discount_percentage: discount,
     discount_amount: additionalDiscount,
-    apply_discount_on: 'Grand Total',
+    apply_discount_on: session.apply_discount_on || 'Grand Total',
     ...(hasProfileTaxes ? { taxes_and_charges: session.taxes_and_charges } : {}),
     items: cartItems.map((item) => ({
       item_code: item.item_code,

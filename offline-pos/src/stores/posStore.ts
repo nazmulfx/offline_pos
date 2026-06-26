@@ -67,6 +67,7 @@ export interface POSSession {
   payments?: Array<{ mode_of_payment: string; default: number; amount: number }>;
   // 'POS Invoice' or 'Sales Invoice' — from POS Settings
   invoice_type: 'POS Invoice' | 'Sales Invoice';
+  apply_discount_on?: string;
 }
 
 
@@ -316,9 +317,16 @@ export const usePOSStore = defineStore('pos', () => {
   });
 
   const taxes = computed(() => {
+    const discountOn = session.value?.apply_discount_on || 'Grand Total';
+    const discountRatio = (discountOn === 'Net Total' && subtotal.value > 0)
+      ? Math.max(0, 1 - (additionalDiscount.value / subtotal.value))
+      : 1;
+
     // If POS Profile has taxes_and_charges template set, use it for all items
     if (session.value?.taxes_and_charges && session.value?.taxes_and_charges_data?.length) {
-      const netTotal = subtotal.value;
+      const netTotal = discountOn === 'Net Total'
+        ? Math.max(0, subtotal.value - additionalDiscount.value)
+        : subtotal.value;
       return session.value.taxes_and_charges_data.map((taxRow: any) => {
         let amt = 0;
         const rate = taxRow.rate || 0;
@@ -341,7 +349,7 @@ export const usePOSStore = defineStore('pos', () => {
     const taxMap: Record<string, { account_head: string; rate: number; tax_amount: number; description: string }> = {};
 
     cartItems.value.forEach((ci) => {
-      const itemNet = ci.qty * ci.rate;
+      const itemNet = ci.qty * ci.rate * discountRatio;
 
       let itemTaxRate: Record<string, number> = {};
       if (ci.item_tax_rate) {
@@ -375,6 +383,14 @@ export const usePOSStore = defineStore('pos', () => {
     taxes.value.reduce((sum, t) => sum + t.tax_amount, 0)
   );
 
+  const discountBase = computed(() => {
+    const discountOn = session.value?.apply_discount_on || 'Grand Total';
+    if (discountOn === 'Net Total') {
+      return subtotal.value;
+    }
+    return subtotal.value + totalTaxes.value;
+  });
+
   const grandTotal = computed(() => {
     const rawTotal = subtotal.value - totalDiscount.value + totalTaxes.value;
     return Math.max(0, rawTotal);
@@ -387,23 +403,23 @@ export const usePOSStore = defineStore('pos', () => {
   function setAdditionalDiscountPercent(val: number) {
     discountType.value = 'percent';
     cartDiscount.value = val;
-    additionalDiscount.value = parseFloat(((subtotal.value + totalTaxes.value) * (val / 100)).toFixed(2));
+    additionalDiscount.value = parseFloat((discountBase.value * (val / 100)).toFixed(2));
   }
 
   function setAdditionalDiscountAmount(val: number) {
     discountType.value = 'amount';
     additionalDiscount.value = val;
-    cartDiscount.value = (subtotal.value + totalTaxes.value) > 0
-      ? parseFloat(((val / (subtotal.value + totalTaxes.value)) * 100).toFixed(4))
+    cartDiscount.value = discountBase.value > 0
+      ? parseFloat(((val / discountBase.value) * 100).toFixed(4))
       : 0;
   }
 
   watch([subtotal, totalTaxes], () => {
     if (discountType.value === 'percent') {
-      additionalDiscount.value = parseFloat(((subtotal.value + totalTaxes.value) * (cartDiscount.value / 100)).toFixed(2));
+      additionalDiscount.value = parseFloat((discountBase.value * (cartDiscount.value / 100)).toFixed(2));
     } else {
-      cartDiscount.value = (subtotal.value + totalTaxes.value) > 0
-        ? parseFloat(((additionalDiscount.value / (subtotal.value + totalTaxes.value)) * 100).toFixed(4))
+      cartDiscount.value = discountBase.value > 0
+        ? parseFloat(((additionalDiscount.value / discountBase.value) * 100).toFixed(4))
         : 0;
     }
   });
@@ -475,6 +491,7 @@ export const usePOSStore = defineStore('pos', () => {
       customer_groups: profileData.customer_groups?.map((g: any) => g.name || g) || [],
       payments,
       invoice_type: invoiceType,
+      apply_discount_on: profileData.apply_discount_on || 'Grand Total',
     };
 
     // Load and cache warehouses list
