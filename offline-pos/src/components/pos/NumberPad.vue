@@ -3,12 +3,12 @@
 -->
 <template>
   <div class="numpad">
-    <div class="numpad__display">
+    <div v-if="!hideHeader" class="numpad__display">
       <span class="numpad__label">{{ label }}</span>
       <span class="numpad__value">{{ displayValue }}</span>
     </div>
 
-    <div class="numpad__mode-tabs">
+    <div v-if="!hideModes" class="numpad__mode-tabs">
       <button
         v-for="mode in modes"
         :key="mode.key"
@@ -45,6 +45,8 @@ import { ref, computed, watch } from 'vue';
 const props = withDefaults(defineProps<{
   modes?: Array<{ key: string; label: string }>;
   initialMode?: string;
+  hideHeader?: boolean;
+  hideModes?: boolean;
 }>(), {
   modes: () => [
     { key: 'qty', label: 'Qty' },
@@ -52,6 +54,8 @@ const props = withDefaults(defineProps<{
     { key: 'rate', label: 'Rate' },
   ],
   initialMode: 'qty',
+  hideHeader: false,
+  hideModes: false,
 });
 
 const emit = defineEmits<{

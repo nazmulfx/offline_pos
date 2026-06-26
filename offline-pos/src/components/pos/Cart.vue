@@ -35,9 +35,9 @@
         v-for="(item, idx) in pos.cartItems"
         :key="`${item.item_code}-${item.batch_no}-${idx}`"
         :item="item"
-        :is-active="activeIdx === idx"
+        :is-active="pos.selectedItemIdx === idx"
         :currency="pos.session?.currency"
-        @select="activeIdx = idx"
+        @select="pos.selectCartItem(idx)"
         @remove="pos.removeFromCart(item.item_code, item.batch_no)"
         @update-qty="(qty) => pos.updateQty(item.item_code, qty, item.batch_no)"
       />
@@ -55,15 +55,42 @@
       <span class="cart__empty-hint">Select items from the left</span>
     </div>
 
-    <!-- ── NumPad ──────────────────────────────── -->
-    <div v-if="activeIdx !== null && pos.cartItems[activeIdx]" class="cart__numpad">
-      <NumberPad @update="onNumpadUpdate" />
-    </div>
-
     <div class="cart__flex" />
 
     <!-- ── Totals ──────────────────────────────── -->
     <div v-if="pos.cartItems.length > 0" class="cart__totals">
+      <!-- Invoice-level Discount Fields -->
+      <div class="cart__discount-inputs">
+        <div class="cart__discount-input-field">
+          <label class="cart__discount-label">Disc (%)</label>
+          <input
+            type="number"
+            :value="pos.cartDiscount"
+            @input="pos.setAdditionalDiscountPercent(parseFloat(($event.target as HTMLInputElement).value) || 0)"
+            class="cart__discount-input"
+            step="0.01"
+            min="0"
+            max="100"
+            placeholder="0"
+          />
+        </div>
+        <div class="cart__discount-input-field">
+          <label class="cart__discount-label">Disc Amt</label>
+          <div class="cart__discount-prefix-wrap">
+            <span class="cart__discount-prefix">{{ currencySymbol }}</span>
+            <input
+              type="number"
+              :value="pos.additionalDiscount"
+              @input="pos.setAdditionalDiscountAmount(parseFloat(($event.target as HTMLInputElement).value) || 0)"
+              class="cart__discount-input cart__discount-input--amt"
+              step="1"
+              min="0"
+              placeholder="0"
+            />
+          </div>
+        </div>
+      </div>
+
       <div class="cart__row">
         <span>Subtotal</span>
         <span>{{ fmt(pos.subtotal) }}</span>
@@ -104,11 +131,14 @@ import { ref, computed } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
 import CustomerSelector from './CustomerSelector.vue';
 import CartItem from './CartItem.vue';
-import NumberPad from './NumberPad.vue';
 
 const pos = usePOSStore();
 const emit = defineEmits<{ (e: 'checkout'): void }>();
-const activeIdx = ref<number | null>(null);
+
+const currencySymbol = computed(() => {
+  const curr = pos.session?.currency || 'BDT';
+  return curr === 'BDT' ? '৳' : curr;
+});
 
 const canCheckout = computed(
   () => pos.cartItems.length > 0 && !!pos.selectedCustomer && pos.grandTotal > 0
@@ -125,18 +155,7 @@ function fmt(v: number) {
 function confirmClear() {
   if (confirm('Clear all cart items?')) {
     pos.clearCart();
-    activeIdx.value = null;
   }
-}
-
-function onNumpadUpdate(mode: string, value: string) {
-  if (activeIdx.value === null) return;
-  const item = pos.cartItems[activeIdx.value];
-  if (!item) return;
-  const n = parseFloat(value) || 0;
-  if (mode === 'qty') pos.updateQty(item.item_code, n, item.batch_no);
-  else if (mode === 'rate') pos.updateRate(item.item_code, n, item.batch_no);
-  else if (mode === 'discount') pos.updateDiscount(item.item_code, n, item.batch_no);
 }
 </script>
 
@@ -321,5 +340,58 @@ function onNumpadUpdate(mode: string, value: string) {
   opacity: 0.3;
   cursor: not-allowed;
   box-shadow: none;
+}
+
+/* ── Invoice discount styling ─────────────────────── */
+.cart__discount-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--pos-border);
+}
+.cart__discount-input-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cart__discount-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--pos-text-muted);
+  letter-spacing: 0.5px;
+}
+.cart__discount-input {
+  width: 100%;
+  background: var(--pos-bg);
+  border: 1px solid var(--pos-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: var(--pos-text);
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+.cart__discount-input:focus {
+  border-color: var(--pos-accent);
+}
+.cart__discount-prefix-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.cart__discount-prefix {
+  position: absolute;
+  left: 10px;
+  font-size: 12px;
+  color: var(--pos-text-muted);
+  pointer-events: none;
+}
+.cart__discount-input--amt {
+  padding-left: 22px;
 }
 </style>
