@@ -42,34 +42,48 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
   const doctype = isPOSInvoice ? 'POS Invoice' : 'Sales Invoice';
 
   // Build taxes table
-  const uniqueTaxes: Record<string, any> = {};
-  cartItems.forEach((item) => {
-    if (item.item_tax_rate) {
-      let rates: Record<string, number> = {};
-      try {
-        rates = typeof item.item_tax_rate === 'string'
-          ? JSON.parse(item.item_tax_rate)
-          : item.item_tax_rate;
-      } catch (e) {
-        console.warn('Failed to parse item_tax_rate:', item.item_tax_rate, e);
-      }
-      Object.keys(rates).forEach((accountHead) => {
-        if (!uniqueTaxes[accountHead]) {
-          uniqueTaxes[accountHead] = {
-            charge_type: 'On Net Total',
-            account_head: accountHead,
-            description: accountHead.split(' - ')[0],
-            rate: 0,
-            set_by_item_tax_template: 1,
-            category: 'Total',
-            add_deduct_tax: 'Add',
-          };
-        }
-      });
-    }
-  });
+  let docTaxes: any[] = [];
+  const hasProfileTaxes = !!(session.taxes_and_charges && session.taxes_and_charges_data?.length);
 
-  const docTaxes = Object.values(uniqueTaxes);
+  if (hasProfileTaxes) {
+    docTaxes = session.taxes_and_charges_data.map((taxRow: any) => ({
+      charge_type: taxRow.charge_type || 'On Net Total',
+      account_head: taxRow.account_head,
+      description: taxRow.description,
+      rate: taxRow.rate || 0,
+      category: taxRow.category || 'Total',
+      add_deduct_tax: taxRow.add_deduct_tax || 'Add',
+      cost_center: taxRow.cost_center || null,
+    }));
+  } else {
+    const uniqueTaxes: Record<string, any> = {};
+    cartItems.forEach((item) => {
+      if (item.item_tax_rate) {
+        let rates: Record<string, number> = {};
+        try {
+          rates = typeof item.item_tax_rate === 'string'
+            ? JSON.parse(item.item_tax_rate)
+            : item.item_tax_rate;
+        } catch (e) {
+          console.warn('Failed to parse item_tax_rate:', item.item_tax_rate, e);
+        }
+        Object.keys(rates).forEach((accountHead) => {
+          if (!uniqueTaxes[accountHead]) {
+            uniqueTaxes[accountHead] = {
+              charge_type: 'On Net Total',
+              account_head: accountHead,
+              description: accountHead.split(' - ')[0],
+              rate: 0,
+              set_by_item_tax_template: 1,
+              category: 'Total',
+              add_deduct_tax: 'Add',
+            };
+          }
+        });
+      }
+    });
+    docTaxes = Object.values(uniqueTaxes);
+  }
 
   const doc: Record<string, any> = {
     doctype,
@@ -84,6 +98,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     due_date: today(),
     additional_discount_percentage: discount,
     discount_amount: additionalDiscount,
+    ...(hasProfileTaxes ? { taxes_and_charges: session.taxes_and_charges } : {}),
     items: cartItems.map((item) => ({
       item_code: item.item_code,
       item_name: item.item_name,
@@ -92,8 +107,10 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
       uom: item.uom,
       warehouse: item.warehouse || session.warehouse,
       discount_percentage: item.discount_percentage || 0,
-      item_tax_template: item.item_tax_template || null,
-      item_tax_rate: typeof item.item_tax_rate === 'object' ? JSON.stringify(item.item_tax_rate) : (item.item_tax_rate || '{}'),
+      ...(!hasProfileTaxes ? {
+        item_tax_template: item.item_tax_template || null,
+        item_tax_rate: typeof item.item_tax_rate === 'object' ? JSON.stringify(item.item_tax_rate) : (item.item_tax_rate || '{}')
+      } : {}),
       ...(item.batch_no ? { batch_no: item.batch_no } : {}),
       ...(item.serial_no ? { serial_no: item.serial_no } : {}),
     })),

@@ -59,6 +59,8 @@ export interface POSSession {
   currency: string;
   price_list: string;
   tax_category?: string;
+  taxes_and_charges?: string;
+  taxes_and_charges_data?: any[];
   customer_groups?: string[];
   payments?: Array<{ mode_of_payment: string; default: number; amount: number }>;
   // 'POS Invoice' or 'Sales Invoice' — from POS Settings
@@ -258,6 +260,28 @@ export const usePOSStore = defineStore('pos', () => {
   });
 
   const taxes = computed(() => {
+    // If POS Profile has taxes_and_charges template set, use it for all items
+    if (session.value?.taxes_and_charges && session.value?.taxes_and_charges_data?.length) {
+      const netTotal = subtotal.value - totalDiscount.value;
+      return session.value.taxes_and_charges_data.map((taxRow: any) => {
+        let amt = 0;
+        const rate = taxRow.rate || 0;
+        if (taxRow.charge_type === 'On Net Total') {
+          amt = netTotal * (rate / 100);
+        } else if (taxRow.charge_type === 'Actual') {
+          amt = rate;
+        } else {
+          amt = netTotal * (rate / 100);
+        }
+        return {
+          account_head: taxRow.account_head,
+          rate: rate,
+          tax_amount: amt,
+          description: taxRow.description || taxRow.account_head.split(' - ')[0],
+        };
+      });
+    }
+
     const taxMap: Record<string, { account_head: string; rate: number; tax_amount: number; description: string }> = {};
 
     cartItems.value.forEach((ci) => {
@@ -342,6 +366,21 @@ export const usePOSStore = defineStore('pos', () => {
       };
     });
 
+    let taxesAndChargesData: any[] = [];
+    if (profileData.taxes_and_charges) {
+      try {
+        const templateDoc = await call('frappe.client.get', {
+          doctype: 'Sales Taxes and Charges Template',
+          name: profileData.taxes_and_charges,
+        });
+        if (templateDoc && templateDoc.taxes) {
+          taxesAndChargesData = templateDoc.taxes;
+        }
+      } catch (err) {
+        console.error('[POSStore] Failed to fetch taxes_and_charges template:', err);
+      }
+    }
+
     session.value = {
       pos_opening: openingEntry.name,
       pos_profile: openingEntry.pos_profile,
@@ -351,6 +390,8 @@ export const usePOSStore = defineStore('pos', () => {
       currency: profileData.currency || 'BDT',
       price_list: profileData.selling_price_list,
       tax_category: profileData.tax_category,
+      taxes_and_charges: profileData.taxes_and_charges,
+      taxes_and_charges_data: taxesAndChargesData,
       customer_groups: profileData.customer_groups?.map((g: any) => g.name || g) || [],
       payments,
       invoice_type: invoiceType,
