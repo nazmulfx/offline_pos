@@ -250,7 +250,7 @@ function updateClock() {
   });
 }
 
-function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any, preOpenedWindow?: Window | null) {
+async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any, preOpenedWindow?: Window | null) {
   successToast.value = { name: invoiceName, offline };
   setTimeout(() => { successToast.value = null; }, 5000);
 
@@ -259,12 +259,56 @@ function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any, preO
 
   if (autoPrint) {
     if (!offline) {
-      const doctype = pos.session?.invoice_type || 'POS Invoice';
-      const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
-      if (preOpenedWindow) {
-        preOpenedWindow.location.href = printUrl;
-      } else {
-        window.open(printUrl, '_blank');
+      try {
+        const doctype = pos.session?.invoice_type || 'POS Invoice';
+        const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}`;
+        const resp = await fetch(printUrl);
+        if (resp.ok) {
+          let html = await resp.text();
+          
+          // Inject auto-print and auto-close script
+          const closeScript = `
+            <script` + `>
+              window.onload = function() {
+                setTimeout(function() {
+                  window.print();
+                }, 250);
+              }
+              window.addEventListener('afterprint', function() {
+                window.close();
+              });
+            </script` + `>
+          `;
+          if (html.includes('</body>')) {
+            html = html.replace('</body>', closeScript + '</body>');
+          } else {
+            html += closeScript;
+          }
+
+          const targetWin = preOpenedWindow || window.open('', '_blank');
+          if (targetWin) {
+            targetWin.document.open();
+            targetWin.document.write(html);
+            targetWin.document.close();
+          }
+        } else {
+          // Fallback to direct redirect
+          const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+          if (preOpenedWindow) {
+            preOpenedWindow.location.href = fallbackUrl;
+          } else {
+            window.open(fallbackUrl, '_blank');
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch and inject printview, falling back to direct redirect:', err);
+        const doctype = pos.session?.invoice_type || 'POS Invoice';
+        const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+        if (preOpenedWindow) {
+          preOpenedWindow.location.href = fallbackUrl;
+        } else {
+          window.open(fallbackUrl, '_blank');
+        }
       }
     } else if (doc) {
       const cachedPF = localStorage.getItem(`print_format_${printFormat}`);

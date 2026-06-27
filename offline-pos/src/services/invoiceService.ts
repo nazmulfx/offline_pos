@@ -464,6 +464,7 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
       setTimeout(() => {
         printWindow.focus();
         printWindow.print();
+        printWindow.close();
       }, 250);
       return;
     } catch (e) {
@@ -628,6 +629,9 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
           window.onload = function() {
             window.print();
           }
+          window.addEventListener('afterprint', function() {
+            window.close();
+          });
         </script>
       </body>
     </html>
@@ -639,5 +643,6 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
   setTimeout(() => {
     printWindow.focus();
     printWindow.print();
+    printWindow.close();
   }, 250);
 }
