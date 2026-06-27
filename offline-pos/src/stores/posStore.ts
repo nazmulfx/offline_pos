@@ -70,6 +70,7 @@ export interface POSSession {
   // 'POS Invoice' or 'Sales Invoice' — from POS Settings
   invoice_type: 'POS Invoice' | 'Sales Invoice';
   apply_discount_on?: string;
+  hide_images?: number;
 }
 
 
@@ -671,6 +672,7 @@ export const usePOSStore = defineStore('pos', () => {
       payments,
       invoice_type: invoiceType,
       apply_discount_on: profileData.apply_discount_on || 'Grand Total',
+      hide_images: profileData.hide_images || 0,
     };
 
     // Load and cache warehouses list

@@ -5,7 +5,7 @@
  * Offline: save to IndexedDB + sync_queue
  */
 import call from '../lib/call';
-import { saveDraftInvoice, addToSyncQueue } from '../db/posDB';
+import { saveDraftInvoice, addToSyncQueue, cachePOSProfile, getCachedPOSProfile } from '../db/posDB';
 import type { CartItem, Customer, POSSession } from '../stores/posStore';
 
 interface CreateInvoicePayload {
@@ -203,10 +203,26 @@ export async function submitInvoice(payload: CreateInvoicePayload): Promise<{
 // ─── POS Session Helpers ─────────────────────────────────────────────────────
 
 export async function getPOSProfileData(posProfile: string): Promise<any> {
-  return call(
-    'erpnext.selling.page.point_of_sale.point_of_sale.get_pos_profile_data',
-    { pos_profile: posProfile }
-  );
+  try {
+    const data = await call(
+      'erpnext.selling.page.point_of_sale.point_of_sale.get_pos_profile_data',
+      { pos_profile: posProfile }
+    );
+    if (data) {
+      if (!data.name) {
+        data.name = posProfile;
+      }
+      await cachePOSProfile(data);
+    }
+    return data;
+  } catch (err) {
+    console.warn('[InvoiceService] getPOSProfileData failed. Trying offline cache...', err);
+    const cached = await getCachedPOSProfile(posProfile);
+    if (cached) {
+      return cached;
+    }
+    throw err;
+  }
 }
 
 export async function checkOpeningEntry(user: string): Promise<any[]> {

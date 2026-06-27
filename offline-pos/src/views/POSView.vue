@@ -177,6 +177,7 @@ import ItemDetails from '../components/pos/ItemDetails.vue';
 import PaymentModal from '../components/pos/PaymentModal.vue';
 import POSClosingModal from '../components/pos/POSClosingModal.vue';
 import OfflineSyncPanel from '../components/pos/OfflineSyncPanel.vue';
+import { getPOSProfileData } from '../services/invoiceService';
 
 const router = useRouter();
 const pos = usePOSStore();
@@ -222,6 +223,17 @@ onMounted(() => {
   }
   if (pos.customers.length === 0) {
     pos.loadCustomers('');
+  }
+
+  if (pos.session.pos_profile) {
+    getPOSProfileData(pos.session.pos_profile).then((profileData) => {
+      if (profileData && pos.session) {
+        pos.session.hide_images = profileData.hide_images ? 1 : 0;
+        pos.session.apply_discount_on = profileData.apply_discount_on || 'Grand Total';
+      }
+    }).catch((err) => {
+      console.warn('[POSView] Failed to refresh POS Profile details:', err);
+    });
   }
 });
 
