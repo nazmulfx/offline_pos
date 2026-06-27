@@ -133,7 +133,7 @@ import NumberPad from './NumberPad.vue';
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{
   (e: 'close'): void;
-  (e: 'success', invoiceName: string, offline: boolean): void;
+  (e: 'success', invoiceName: string, offline: boolean, doc?: any, preOpenedWindow?: Window | null): void;
 }>();
 
 const pos = usePOSStore();
@@ -222,6 +222,13 @@ async function submitPayment() {
   if (!canSubmit.value || isSubmitting.value) return;
   if (!pos.selectedCustomer || !pos.session) return;
 
+  // Open blank print window synchronously inside click event handler to bypass popup blockers
+  let printWindow: Window | null = null;
+  const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
+  if (autoPrint) {
+    printWindow = window.open('about:blank', '_blank');
+  }
+
   isSubmitting.value = true;
   try {
     const result = await submitInvoice({
@@ -232,6 +239,10 @@ async function submitPayment() {
       discount: pos.cartDiscount,
       additionalDiscount: pos.additionalDiscount,
       isOnline: network.isOnline,
+      subtotal: pos.subtotal,
+      grandTotal: pos.grandTotal,
+      totalTaxes: pos.totalTaxes,
+      taxes: pos.taxes,
     });
 
     if (result.success) {
@@ -240,11 +251,15 @@ async function submitPayment() {
       }
       await pos.decrementStock(pos.cartItems);
       pos.clearCart();
-      emit('success', result.invoiceName || `OFFLINE-${result.localId}`, !!result.offline);
+      emit('success', result.invoiceName || `OFFLINE-${result.localId}`, !!result.offline, result.doc, printWindow);
       close();
     } else {
+      if (printWindow) printWindow.close();
       pos.showAlert('Payment Error', result.error || 'Failed to submit invoice');
     }
+  } catch (err: any) {
+    if (printWindow) printWindow.close();
+    pos.showAlert('Payment Error', err?.message || 'Failed to submit invoice');
   } finally {
     isSubmitting.value = false;
   }
