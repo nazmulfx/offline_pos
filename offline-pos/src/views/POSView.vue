@@ -266,19 +266,27 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         if (resp.ok) {
           let html = await resp.text();
           
-          // Inject auto-print and auto-close script
+          // Inject base href to resolve relative assets and script to auto-print/close
+          const baseTag = `<base href="${window.location.origin}">`;
           const closeScript = `
             <script` + `>
               window.onload = function() {
                 setTimeout(function() {
                   window.print();
-                }, 250);
+                }, 500);
               }
               window.addEventListener('afterprint', function() {
                 window.close();
               });
             </script` + `>
           `;
+          
+          if (html.includes('<head>')) {
+            html = html.replace('<head>', '<head>' + baseTag);
+          } else {
+            html = baseTag + html;
+          }
+
           if (html.includes('</body>')) {
             html = html.replace('</body>', closeScript + '</body>');
           } else {
