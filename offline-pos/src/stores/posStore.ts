@@ -342,6 +342,13 @@ export const usePOSStore = defineStore('pos', () => {
       }
       existing.qty += 1;
       existing.amount = existing.qty * existing.rate;
+      
+      const idx = cartItems.value.findIndex(
+        (ci) => ci.item_code === item.item_code && ci.batch_no === itemBatchNo
+      );
+      if (idx !== -1) {
+        selectCartItem(idx);
+      }
     } else {
       cartItems.value.push({
         item_code: item.item_code,
@@ -359,6 +366,7 @@ export const usePOSStore = defineStore('pos', () => {
         price_list_rate: item.price_list_rate || 0,
         is_stock_item: item.is_stock_item ? 1 : 0,
       });
+      selectCartItem(cartItems.value.length - 1);
     }
   }
 
