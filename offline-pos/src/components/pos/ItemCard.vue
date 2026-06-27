@@ -151,6 +151,11 @@ function formatCurrency(value: number | undefined): string {
   color: var(--pos-text-muted);
   margin: 0;
   font-family: monospace;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .item-card__footer {
   display: flex;
