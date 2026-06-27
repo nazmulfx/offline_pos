@@ -5,7 +5,7 @@
   <button class="item-card" @click="emit('select', item)" :title="item.item_name">
     <div class="item-card__img-wrap">
       <img
-        v-if="item.item_image"
+        v-if="!hideImages && item.item_image && !imgError"
         :src="item.item_image"
         :alt="item.item_name"
         class="item-card__img"
@@ -18,6 +18,7 @@
           <path d="M16 3H8a2 2 0 0 0-2 2v2h12V5a2 2 0 0 0-2-2z"/>
         </svg>
       </div>
+
       <div class="item-card__qty-badge item-card__qty-badge--service" v-if="!item.is_stock_item">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10" class="service-icon">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
@@ -43,12 +44,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
+import { usePOSStore } from '../../stores/posStore';
 import type { POSItem } from '../../stores/posStore';
 
 const props = defineProps<{ item: POSItem; currency?: string }>();
 const emit = defineEmits<{ (e: 'select', item: POSItem): void }>();
 const imgError = ref(false);
+
+const pos = usePOSStore();
+const hideImages = computed(() => !!pos.session?.hide_images);
 
 function formatCurrency(value: number | undefined): string {
   if (value === undefined || value === null) return '—';
@@ -62,6 +67,7 @@ function formatCurrency(value: number | undefined): string {
 
 <style scoped>
 .item-card {
+  position: relative;
   background: var(--pos-surface);
   border: 1px solid var(--pos-border);
   border-radius: 12px;
@@ -73,6 +79,9 @@ function formatCurrency(value: number | undefined): string {
   width: 100%;
   display: flex;
   flex-direction: column;
+}
+.item-card--no-image {
+  min-height: 96px;
 }
 .item-card:hover {
   border-color: var(--pos-accent);
@@ -151,6 +160,11 @@ function formatCurrency(value: number | undefined): string {
   color: var(--pos-text-muted);
   margin: 0;
   font-family: monospace;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .item-card__footer {
   display: flex;

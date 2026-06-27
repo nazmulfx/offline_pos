@@ -55,7 +55,6 @@
       <span class="cart__empty-hint">Select items from the left</span>
     </div>
 
-    <div class="cart__flex" />
 
     <!-- ── Totals ──────────────────────────────── -->
     <div v-if="pos.cartItems.length > 0" class="cart__totals">
@@ -273,7 +272,6 @@ function confirmClear() {
   flex-shrink: 0;
 }
 
-.cart__flex { flex: 1; }
 
 /* ── Totals ──────────────────────────────────────── */
 .cart__totals {

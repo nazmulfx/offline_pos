@@ -25,7 +25,7 @@
         <div class="item-details__summary-right">
           <div class="item-details__img-wrap">
             <img
-              v-if="posItem?.item_image"
+              v-if="!hideImages && posItem?.item_image && !imgError"
               :src="posItem.item_image"
               :alt="item.item_name"
               class="item-details__img"
@@ -200,6 +200,8 @@ const posItem = computed(() => {
   if (!item.value) return null;
   return pos.items.find((i) => i.item_code === item.value?.item_code) || null;
 });
+
+const hideImages = computed(() => !!pos.session?.hide_images);
 
 const currencySymbol = computed(() => {
   const curr = pos.session?.currency || 'BDT';

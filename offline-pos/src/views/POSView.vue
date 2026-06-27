@@ -177,6 +177,7 @@ import ItemDetails from '../components/pos/ItemDetails.vue';
 import PaymentModal from '../components/pos/PaymentModal.vue';
 import POSClosingModal from '../components/pos/POSClosingModal.vue';
 import OfflineSyncPanel from '../components/pos/OfflineSyncPanel.vue';
+import { getPOSProfileData, printInvoiceOffline } from '../services/invoiceService';
 
 const router = useRouter();
 const pos = usePOSStore();
@@ -223,6 +224,19 @@ onMounted(() => {
   if (pos.customers.length === 0) {
     pos.loadCustomers('');
   }
+
+  if (pos.session.pos_profile) {
+    getPOSProfileData(pos.session.pos_profile).then((profileData) => {
+      if (profileData && pos.session) {
+        pos.session.hide_images = profileData.hide_images ? 1 : 0;
+        pos.session.apply_discount_on = profileData.apply_discount_on || 'Grand Total';
+        pos.session.print_format = profileData.print_format || '';
+        pos.session.print_receipt_on_order_complete = profileData.print_receipt_on_order_complete ? 1 : 0;
+      }
+    }).catch((err) => {
+      console.warn('[POSView] Failed to refresh POS Profile details:', err);
+    });
+  }
 });
 
 onBeforeUnmount(() => {
@@ -236,9 +250,30 @@ function updateClock() {
   });
 }
 
-function onPaymentSuccess(invoiceName: string, offline: boolean) {
+function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any, preOpenedWindow?: Window | null) {
   successToast.value = { name: invoiceName, offline };
   setTimeout(() => { successToast.value = null; }, 5000);
+
+  const printFormat = pos.session?.print_format || '';
+  const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
+
+  if (autoPrint) {
+    if (!offline) {
+      const doctype = pos.session?.invoice_type || 'POS Invoice';
+      const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+      if (preOpenedWindow) {
+        preOpenedWindow.location.href = printUrl;
+      } else {
+        window.open(printUrl, '_blank');
+      }
+    } else if (doc) {
+      const cachedPF = localStorage.getItem(`print_format_${printFormat}`);
+      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: printFormat };
+      printInvoiceOffline(doc, pfData, preOpenedWindow);
+    }
+  } else if (preOpenedWindow) {
+    preOpenedWindow.close();
+  }
 }
 
 function confirmClose() {

@@ -70,6 +70,9 @@ export interface POSSession {
   // 'POS Invoice' or 'Sales Invoice' — from POS Settings
   invoice_type: 'POS Invoice' | 'Sales Invoice';
   apply_discount_on?: string;
+  hide_images?: number;
+  print_format?: string;
+  print_receipt_on_order_complete?: number;
 }
 
 
@@ -342,6 +345,13 @@ export const usePOSStore = defineStore('pos', () => {
       }
       existing.qty += 1;
       existing.amount = existing.qty * existing.rate;
+      
+      const idx = cartItems.value.findIndex(
+        (ci) => ci.item_code === item.item_code && ci.batch_no === itemBatchNo
+      );
+      if (idx !== -1) {
+        selectCartItem(idx);
+      }
     } else {
       cartItems.value.push({
         item_code: item.item_code,
@@ -359,6 +369,7 @@ export const usePOSStore = defineStore('pos', () => {
         price_list_rate: item.price_list_rate || 0,
         is_stock_item: item.is_stock_item ? 1 : 0,
       });
+      selectCartItem(cartItems.value.length - 1);
     }
   }
 
@@ -663,6 +674,9 @@ export const usePOSStore = defineStore('pos', () => {
       payments,
       invoice_type: invoiceType,
       apply_discount_on: profileData.apply_discount_on || 'Grand Total',
+      hide_images: profileData.hide_images || 0,
+      print_format: profileData.print_format || '',
+      print_receipt_on_order_complete: profileData.print_receipt_on_order_complete || 0,
     };
 
     // Load and cache warehouses list
