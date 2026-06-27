@@ -262,44 +262,56 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
       try {
         const doctype = pos.session?.invoice_type || 'POS Invoice';
         const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}`;
-        const resp = await fetch(printUrl);
-        if (resp.ok) {
+        const resp = await fetch(printUrl, {
+          headers: {
+            'X-Frappe-Site-Name': window.location.hostname,
+          },
+          credentials: 'include',
+        });
+        
+        let success = false;
+        if (resp.ok && !resp.redirected && !resp.url.includes('/login')) {
           let html = await resp.text();
-          
-          // Inject base href to resolve relative assets and script to auto-print/close
-          const baseTag = `<base href="${window.location.origin}">`;
-          const closeScript = `
-            <script` + `>
-              window.onload = function() {
-                setTimeout(function() {
-                  window.print();
-                }, 500);
-              }
-              window.addEventListener('afterprint', function() {
-                window.close();
-              });
-            </script` + `>
-          `;
-          
-          if (html.includes('<head>')) {
-            html = html.replace('<head>', '<head>' + baseTag);
-          } else {
-            html = baseTag + html;
-          }
+          if (html.includes('print-format')) {
+            success = true;
+            
+            // Inject base href to resolve relative assets and script to auto-print/close
+            const baseTag = `<base href="${window.location.origin}">`;
+            const closeScript = `
+              <script` + `>
+                window.onload = function() {
+                  setTimeout(function() {
+                    window.print();
+                  }, 500);
+                }
+                window.addEventListener('afterprint', function() {
+                  window.close();
+                });
+              </script` + `>
+            `;
+            
+            if (html.includes('<head>')) {
+              html = html.replace('<head>', '<head>' + baseTag);
+            } else {
+              html = baseTag + html;
+            }
 
-          if (html.includes('</body>')) {
-            html = html.replace('</body>', closeScript + '</body>');
-          } else {
-            html += closeScript;
-          }
+            if (html.includes('</body>')) {
+              html = html.replace('</body>', closeScript + '</body>');
+            } else {
+              html += closeScript;
+            }
 
-          const targetWin = preOpenedWindow || window.open('', '_blank');
-          if (targetWin) {
-            targetWin.document.open();
-            targetWin.document.write(html);
-            targetWin.document.close();
+            const targetWin = preOpenedWindow || window.open('', '_blank');
+            if (targetWin) {
+              targetWin.document.open();
+              targetWin.document.write(html);
+              targetWin.document.close();
+            }
           }
-        } else {
+        }
+
+        if (!success) {
           // Fallback to direct redirect
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
           if (preOpenedWindow) {
