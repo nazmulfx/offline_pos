@@ -92,6 +92,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
   const doc: Record<string, any> = {
     doctype,
     is_pos: 1,
+    update_stock: 1,
     pos_profile: session.pos_profile,
     company: session.company,
     customer: customer.name,

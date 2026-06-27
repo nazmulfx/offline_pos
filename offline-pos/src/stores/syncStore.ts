@@ -212,6 +212,10 @@ export const useSyncStore = defineStore('sync', () => {
   async function syncInvoiceItem(item: any): Promise<void> {
     const { invoice, local_id } = item.payload;
 
+    if (invoice) {
+      invoice.update_stock = 1;
+    }
+
     const insertedDoc = await call(
       'frappe.client.insert',
       { doc: invoice },
