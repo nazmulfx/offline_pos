@@ -73,6 +73,7 @@ export interface POSSession {
   hide_images?: number;
   print_format?: string;
   print_receipt_on_order_complete?: number;
+  allow_partial_payment?: number;
 }
 
 
@@ -677,6 +678,7 @@ export const usePOSStore = defineStore('pos', () => {
       hide_images: profileData.hide_images || 0,
       print_format: profileData.print_format || '',
       print_receipt_on_order_complete: profileData.print_receipt_on_order_complete || 0,
+      allow_partial_payment: profileData.allow_partial_payment,
     };
 
     // Load and cache warehouses list

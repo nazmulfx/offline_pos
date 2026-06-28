@@ -34,6 +34,10 @@
               <span>Amount Paid</span>
               <span :class="{ 'paid-ok': amountPaid >= pos.grandTotal }">{{ fmt(amountPaid) }}</span>
             </div>
+            <div class="payment-modal__summary-row payment-modal__summary-row--outstanding" v-if="pos.session?.allow_partial_payment === 1 && outstandingAmount > 0">
+              <span>Outstanding (Credit)</span>
+              <span class="payment-modal__outstanding">{{ fmt(outstandingAmount) }}</span>
+            </div>
             <div class="payment-modal__summary-row" v-if="change > 0">
               <span>Change</span>
               <span class="payment-modal__change">{{ fmt(change) }}</span>
@@ -82,6 +86,9 @@
             <button class="payment-modal__quick-btn payment-modal__quick-btn--exact" @click="setExact">
               Exact
             </button>
+            <button v-if="pos.session?.allow_partial_payment === 1" class="payment-modal__quick-btn payment-modal__quick-btn--credit" @click="setCredit">
+              Credit Sale (0)
+            </button>
           </div>
 
           <!-- NumPad for selected payment -->
@@ -103,7 +110,17 @@
               <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="18" height="18">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
-              {{ isSubmitting ? 'Processing...' : (network.isOnline ? 'Submit Invoice' : 'Save Offline') }}
+              {{ 
+                isSubmitting 
+                  ? 'Processing...' 
+                  : (amountPaid >= pos.grandTotal 
+                      ? (network.isOnline ? 'Submit Invoice' : 'Save Offline') 
+                      : (amountPaid === 0 
+                          ? (network.isOnline ? 'Submit Credit Sale' : 'Save Credit Sale') 
+                          : (network.isOnline ? 'Submit Partial Payment' : 'Save Partial Payment')
+                        )
+                    )
+              }}
             </button>
           </div>
 
@@ -177,9 +194,14 @@ const change = computed(() => Math.max(0, amountPaid.value - pos.grandTotal));
 
 const netTotal = computed(() => pos.subtotal - pos.totalDiscount);
 
-const canSubmit = computed(() =>
-  amountPaid.value >= pos.grandTotal && pos.selectedCustomer && pos.cartItems.length > 0
-);
+const outstandingAmount = computed(() => Math.max(0, pos.grandTotal - amountPaid.value));
+
+const canSubmit = computed(() => {
+  if (!pos.selectedCustomer || pos.cartItems.length === 0) return false;
+  const allowPartial = pos.session?.allow_partial_payment === 1;
+  if (allowPartial) return true;
+  return amountPaid.value >= pos.grandTotal;
+});
 
 const quickCashPresets = computed(() => {
   const total = pos.grandTotal;
@@ -197,6 +219,12 @@ function setCashAmount(amount: number) {
 
 function setExact() {
   paymentMethods.value[primaryMethodIdx.value].amount = pos.grandTotal;
+}
+
+function setCredit() {
+  paymentMethods.value.forEach((p) => {
+    p.amount = 0;
+  });
 }
 
 function onNumpadUpdate(_mode: string, value: string) {
@@ -235,7 +263,7 @@ async function submitPayment() {
       session: pos.session,
       customer: pos.selectedCustomer,
       cartItems: pos.cartItems,
-      payments: paymentMethods.value.filter((p) => p.amount > 0),
+      payments: paymentMethods.value,
       discount: pos.cartDiscount,
       additionalDiscount: pos.additionalDiscount,
       isOnline: network.isOnline,
@@ -344,6 +372,23 @@ function closeIfNotSubmitting() { if (!isSubmitting.value) close(); }
 }
 .paid-ok { color: #34d399 !important; font-weight: 700; }
 .payment-modal__change { color: #34d399; font-weight: 700; }
+.payment-modal__outstanding { color: var(--pos-warning); font-weight: 700; }
+.payment-modal__summary-row--outstanding {
+  background: rgba(217, 119, 6, 0.05);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin: 4px -10px;
+  border-left: 3px solid var(--pos-warning);
+}
+.payment-modal__quick-btn--credit {
+  background: rgba(217, 119, 6, 0.12);
+  border-color: var(--pos-warning);
+  color: var(--pos-warning);
+}
+.payment-modal__quick-btn--credit:hover {
+  border-color: var(--pos-warning);
+  background: rgba(217, 119, 6, 0.18);
+}
 .payment-modal__summary-row--divider {
   border-top: 1px dashed var(--pos-border);
   padding-top: 8px;

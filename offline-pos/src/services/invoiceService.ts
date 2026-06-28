@@ -128,12 +128,28 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
       ...(item.conversion_factor ? { conversion_factor: item.conversion_factor } : {}),
       ...(item.price_list_rate ? { price_list_rate: item.price_list_rate } : {}),
     })),
-    payments: payments
-      .filter((p) => p.amount > 0)
-      .map((p) => ({
-        mode_of_payment: p.mode_of_payment,
-        amount: p.amount,
-      })),
+    payments: (() => {
+      const allowPartial = session.allow_partial_payment === 1;
+      let docPayments = payments
+        .filter((p) => p.amount > 0)
+        .map((p) => ({
+          mode_of_payment: p.mode_of_payment,
+          amount: p.amount,
+        }));
+
+      if (docPayments.length === 0 && allowPartial && payments.length > 0) {
+        docPayments = [{
+          mode_of_payment: payments[0].mode_of_payment,
+          amount: 0,
+        }];
+      } else if (docPayments.length === 0 && allowPartial) {
+        docPayments = [{
+          mode_of_payment: 'Cash',
+          amount: 0,
+        }];
+      }
+      return docPayments;
+    })(),
   };
 
   if (docTaxes.length > 0) {
