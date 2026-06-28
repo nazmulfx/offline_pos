@@ -42,6 +42,7 @@ export interface CartItem {
   item_tax_rate?: string;
   conversion_factor?: number;
   price_list_rate?: number;
+  original_price_list_rate?: number;
   is_stock_item?: number;
 }
 
@@ -73,6 +74,10 @@ export interface POSSession {
   hide_images?: number;
   print_format?: string;
   print_receipt_on_order_complete?: number;
+  allow_partial_payment?: number;
+  allow_rate_change?: number;
+  allow_discount_change?: number;
+  disable_rounded_total?: number;
 }
 
 
@@ -367,6 +372,7 @@ export const usePOSStore = defineStore('pos', () => {
         item_tax_rate: item.item_tax_rate,
         conversion_factor: 1,
         price_list_rate: item.price_list_rate || 0,
+        original_price_list_rate: item.price_list_rate || 0,
         is_stock_item: item.is_stock_item ? 1 : 0,
       });
       selectCartItem(cartItems.value.length - 1);
@@ -418,17 +424,17 @@ export const usePOSStore = defineStore('pos', () => {
       (ci) => ci.item_code === item_code && ci.batch_no === batch_no
     );
     if (!item) return;
-    item.rate = rate;
-    const priceListRate = item.price_list_rate || rate;
-    if (priceListRate > 0 && rate < priceListRate) {
-      item.discount_percentage = ((priceListRate - rate) / priceListRate) * 100;
+    const sanitizedRate = Math.max(0, rate);
+    item.rate = sanitizedRate;
+    
+    const priceListRate = item.price_list_rate || sanitizedRate;
+    if (priceListRate > 0 && sanitizedRate < priceListRate) {
+      item.discount_percentage = ((priceListRate - sanitizedRate) / priceListRate) * 100;
     } else {
       item.discount_percentage = 0;
-      if (rate > priceListRate) {
-        item.price_list_rate = rate;
-      }
     }
-    item.amount = item.qty * rate;
+    
+    item.amount = item.qty * sanitizedRate;
   }
 
   function updateDiscount(item_code: string, pct: number, batch_no: string = '') {
@@ -436,9 +442,10 @@ export const usePOSStore = defineStore('pos', () => {
       (ci) => ci.item_code === item_code && ci.batch_no === batch_no
     );
     if (!item) return;
-    item.discount_percentage = pct;
+    const sanitizedPct = Math.max(0, Math.min(100, pct));
+    item.discount_percentage = sanitizedPct;
     const priceListRate = item.price_list_rate || item.rate;
-    item.rate = priceListRate * (1 - pct / 100);
+    item.rate = priceListRate * (1 - sanitizedPct / 100);
     item.amount = item.qty * item.rate;
   }
 
@@ -475,6 +482,7 @@ export const usePOSStore = defineStore('pos', () => {
     );
     if (!item) return;
     item.price_list_rate = priceListRate;
+    item.original_price_list_rate = priceListRate;
     const pct = item.discount_percentage || 0;
     item.rate = priceListRate * (1 - pct / 100);
     item.amount = item.qty * item.rate;
@@ -578,21 +586,38 @@ export const usePOSStore = defineStore('pos', () => {
     return Math.max(0, rawTotal);
   });
 
+  const roundedTotal = computed(() => {
+    const total = grandTotal.value;
+    if (session.value?.disable_rounded_total === 1) {
+      return total;
+    }
+    return Math.round(total);
+  });
+
+  const roundingAdjustment = computed(() => {
+    if (session.value?.disable_rounded_total === 1) {
+      return 0;
+    }
+    return parseFloat((roundedTotal.value - grandTotal.value).toFixed(2));
+  });
+
   const cartCount = computed(() =>
     cartItems.value.reduce((sum, ci) => sum + ci.qty, 0)
   );
 
   function setAdditionalDiscountPercent(val: number) {
     discountType.value = 'percent';
-    cartDiscount.value = val;
-    additionalDiscount.value = parseFloat((discountBase.value * (val / 100)).toFixed(2));
+    const sanitizedVal = Math.max(0, Math.min(100, val));
+    cartDiscount.value = sanitizedVal;
+    additionalDiscount.value = parseFloat((discountBase.value * (sanitizedVal / 100)).toFixed(2));
   }
 
   function setAdditionalDiscountAmount(val: number) {
     discountType.value = 'amount';
-    additionalDiscount.value = val;
+    const sanitizedVal = Math.max(0, Math.min(discountBase.value, val));
+    additionalDiscount.value = sanitizedVal;
     cartDiscount.value = discountBase.value > 0
-      ? parseFloat(((val / discountBase.value) * 100).toFixed(4))
+      ? parseFloat(((sanitizedVal / discountBase.value) * 100).toFixed(4))
       : 0;
   }
 
@@ -600,6 +625,9 @@ export const usePOSStore = defineStore('pos', () => {
     if (discountType.value === 'percent') {
       additionalDiscount.value = parseFloat((discountBase.value * (cartDiscount.value / 100)).toFixed(2));
     } else {
+      if (additionalDiscount.value > discountBase.value) {
+        additionalDiscount.value = discountBase.value;
+      }
       cartDiscount.value = discountBase.value > 0
         ? parseFloat(((additionalDiscount.value / discountBase.value) * 100).toFixed(4))
         : 0;
@@ -677,6 +705,10 @@ export const usePOSStore = defineStore('pos', () => {
       hide_images: profileData.hide_images || 0,
       print_format: profileData.print_format || '',
       print_receipt_on_order_complete: profileData.print_receipt_on_order_complete || 0,
+      allow_partial_payment: profileData.allow_partial_payment,
+      allow_rate_change: profileData.allow_rate_change,
+      allow_discount_change: profileData.allow_discount_change,
+      disable_rounded_total: profileData.disable_rounded_total,
     };
 
     // Load and cache warehouses list
@@ -846,6 +878,6 @@ export const usePOSStore = defineStore('pos', () => {
     // designed alert
     activeAlert, showAlert, closeAlert,
     // Totals
-    subtotal, totalDiscount, grandTotal, cartCount, taxes, totalTaxes,
+    subtotal, totalDiscount, grandTotal, roundedTotal, roundingAdjustment, cartCount, taxes, totalTaxes,
   };
 });

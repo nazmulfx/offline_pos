@@ -55,15 +55,14 @@ export const useSyncStore = defineStore('sync', () => {
         return;
       }
 
-      // Second try: POST to get_logged_user — Frappe always returns a fresh token
+      // Second try: GET to get_logged_user — Frappe returns a fresh token
       const res = await fetch('/api/method/frappe.auth.get_logged_user', {
-        method: 'POST',
+        method: 'GET',
         headers: {
           'X-Frappe-Site-Name': window.location.hostname,
-          'Content-Type': 'application/json; charset=utf-8',
+          'Accept': 'application/json',
         },
         credentials: 'include',
-        body: '{}',
       });
       if (res.ok) {
         const newCsrf = res.headers.get('X-Frappe-CSRF-Token');

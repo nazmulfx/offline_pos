@@ -80,10 +80,12 @@
             <input
               type="number"
               :value="item.rate"
+              :disabled="pos.session?.allow_rate_change !== 1"
+              :readonly="pos.session?.allow_rate_change !== 1"
               @input="pos.updateRate(item.item_code, parseFloat(($event.target as HTMLInputElement).value) || 0, item.batch_no)"
-              @focus="activeField = 'rate'"
+              @focus="pos.session?.allow_rate_change === 1 ? activeField = 'rate' : null"
               class="item-details__input item-details__input--currency"
-              :class="{ 'item-details__input--active': activeField === 'rate' }"
+              :class="{ 'item-details__input--active': activeField === 'rate', 'disabled': pos.session?.allow_rate_change !== 1 }"
               step="0.01"
               min="0"
             />
@@ -107,10 +109,12 @@
           <input
             type="number"
             :value="parseFloat((item.discount_percentage || 0).toFixed(2))"
+            :disabled="pos.session?.allow_discount_change !== 1"
+            :readonly="pos.session?.allow_discount_change !== 1"
             @input="pos.updateDiscount(item.item_code, parseFloat(($event.target as HTMLInputElement).value) || 0, item.batch_no)"
-            @focus="activeField = 'discount'"
+            @focus="pos.session?.allow_discount_change === 1 ? activeField = 'discount' : null"
             class="item-details__input"
-            :class="{ 'item-details__input--active': activeField === 'discount' }"
+            :class="{ 'item-details__input--active': activeField === 'discount', 'disabled': pos.session?.allow_discount_change !== 1 }"
             step="0.01"
             min="0"
             max="100"
@@ -254,8 +258,16 @@ function onNumpadUpdate(mode: string, value: string) {
   if (!item.value) return;
   const n = parseFloat(value) || 0;
   if (mode === 'qty') pos.updateQty(item.value.item_code, n, item.value.batch_no);
-  else if (mode === 'rate') pos.updateRate(item.value.item_code, n, item.value.batch_no);
-  else if (mode === 'discount') pos.updateDiscount(item.value.item_code, n, item.value.batch_no);
+  else if (mode === 'rate') {
+    if (pos.session?.allow_rate_change === 1) {
+      pos.updateRate(item.value.item_code, n, item.value.batch_no);
+    }
+  }
+  else if (mode === 'discount') {
+    if (pos.session?.allow_discount_change === 1) {
+      pos.updateDiscount(item.value.item_code, n, item.value.batch_no);
+    }
+  }
 }
 </script>
 

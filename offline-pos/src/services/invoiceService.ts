@@ -107,6 +107,8 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     net_total: payload.subtotal || 0,
     total: payload.subtotal || 0,
     grand_total: payload.grandTotal || 0,
+    disable_rounded_total: session.disable_rounded_total || 0,
+    rounded_total: session.disable_rounded_total === 1 ? 0 : Math.round(payload.grandTotal || 0),
     total_taxes_and_charges: payload.totalTaxes || 0,
     paid_amount: payments.reduce((acc, p) => acc + p.amount, 0),
     ...(hasProfileTaxes ? { taxes_and_charges: session.taxes_and_charges } : {}),
@@ -128,12 +130,28 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
       ...(item.conversion_factor ? { conversion_factor: item.conversion_factor } : {}),
       ...(item.price_list_rate ? { price_list_rate: item.price_list_rate } : {}),
     })),
-    payments: payments
-      .filter((p) => p.amount > 0)
-      .map((p) => ({
-        mode_of_payment: p.mode_of_payment,
-        amount: p.amount,
-      })),
+    payments: (() => {
+      const allowPartial = session.allow_partial_payment === 1;
+      let docPayments = payments
+        .filter((p) => p.amount > 0)
+        .map((p) => ({
+          mode_of_payment: p.mode_of_payment,
+          amount: p.amount,
+        }));
+
+      if (docPayments.length === 0 && allowPartial && payments.length > 0) {
+        docPayments = [{
+          mode_of_payment: payments[0].mode_of_payment,
+          amount: 0,
+        }];
+      } else if (docPayments.length === 0 && allowPartial) {
+        docPayments = [{
+          mode_of_payment: 'Cash',
+          amount: 0,
+        }];
+      }
+      return docPayments;
+    })(),
   };
 
   if (docTaxes.length > 0) {

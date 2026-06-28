@@ -26,13 +26,25 @@
               <span>{{ tax.description }} ({{ tax.rate }}%)</span>
               <span>{{ fmt(tax.tax_amount) }}</span>
             </div>
-            <div class="payment-modal__summary-row payment-modal__summary-row--divider">
-              <span class="font-bold">Grand Total</span>
-              <span class="payment-modal__grand">{{ fmt(pos.grandTotal) }}</span>
+            <div class="payment-modal__summary-row" :class="{ 'payment-modal__summary-row--divider': pos.session?.disable_rounded_total === 1 }">
+              <span :class="{ 'font-bold': pos.session?.disable_rounded_total === 1 }">Grand Total</span>
+              <span :class="{ 'payment-modal__grand': pos.session?.disable_rounded_total === 1 }">{{ fmt(pos.grandTotal) }}</span>
+            </div>
+            <div v-if="pos.session?.disable_rounded_total !== 1 && pos.roundingAdjustment !== 0" class="payment-modal__summary-row">
+              <span>Rounding Adjustment</span>
+              <span>{{ fmt(pos.roundingAdjustment) }}</span>
+            </div>
+            <div v-if="pos.session?.disable_rounded_total !== 1" class="payment-modal__summary-row payment-modal__summary-row--divider">
+              <span class="font-bold">Rounded Total</span>
+              <span class="payment-modal__grand">{{ fmt(payableTotal) }}</span>
             </div>
             <div class="payment-modal__summary-row">
               <span>Amount Paid</span>
-              <span :class="{ 'paid-ok': amountPaid >= pos.grandTotal }">{{ fmt(amountPaid) }}</span>
+              <span :class="{ 'paid-ok': amountPaid >= payableTotal }">{{ fmt(amountPaid) }}</span>
+            </div>
+            <div class="payment-modal__summary-row payment-modal__summary-row--outstanding" v-if="pos.session?.allow_partial_payment === 1 && outstandingAmount > 0">
+              <span>Outstanding (Credit)</span>
+              <span class="payment-modal__outstanding">{{ fmt(outstandingAmount) }}</span>
             </div>
             <div class="payment-modal__summary-row" v-if="change > 0">
               <span>Change</span>
@@ -82,6 +94,9 @@
             <button class="payment-modal__quick-btn payment-modal__quick-btn--exact" @click="setExact">
               Exact
             </button>
+            <button v-if="pos.session?.allow_partial_payment === 1" class="payment-modal__quick-btn payment-modal__quick-btn--credit" @click="setCredit">
+              Credit Sale (0)
+            </button>
           </div>
 
           <!-- NumPad for selected payment -->
@@ -103,7 +118,17 @@
               <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="18" height="18">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
-              {{ isSubmitting ? 'Processing...' : (network.isOnline ? 'Submit Invoice' : 'Save Offline') }}
+              {{ 
+                isSubmitting 
+                  ? 'Processing...' 
+                  : (amountPaid >= payableTotal 
+                      ? (network.isOnline ? 'Submit Invoice' : 'Save Offline') 
+                      : (amountPaid === 0 
+                          ? (network.isOnline ? 'Submit Credit Sale' : 'Save Credit Sale') 
+                          : (network.isOnline ? 'Submit Partial Payment' : 'Save Partial Payment')
+                        )
+                    )
+              }}
             </button>
           </div>
 
@@ -140,6 +165,8 @@ const pos = usePOSStore();
 const network = useNetworkStore();
 const sync = useSyncStore();
 
+const payableTotal = computed(() => pos.roundedTotal);
+
 // Payment methods from POS profile
 const paymentMethods = ref<Array<{ mode_of_payment: string; amount: number }>>([]);
 const primaryMethodIdx = ref(0);
@@ -164,7 +191,7 @@ function initPaymentMethods() {
   }
   // Auto-set cash to grand total
   if (paymentMethods.value.length > 0) {
-    paymentMethods.value[0].amount = pos.grandTotal;
+    paymentMethods.value[0].amount = payableTotal.value;
   }
   primaryMethodIdx.value = 0;
 }
@@ -173,16 +200,21 @@ const amountPaid = computed(() =>
   paymentMethods.value.reduce((sum, m) => sum + (m.amount || 0), 0)
 );
 
-const change = computed(() => Math.max(0, amountPaid.value - pos.grandTotal));
+const change = computed(() => Math.max(0, amountPaid.value - payableTotal.value));
 
 const netTotal = computed(() => pos.subtotal - pos.totalDiscount);
 
-const canSubmit = computed(() =>
-  amountPaid.value >= pos.grandTotal && pos.selectedCustomer && pos.cartItems.length > 0
-);
+const outstandingAmount = computed(() => Math.max(0, payableTotal.value - amountPaid.value));
+
+const canSubmit = computed(() => {
+  if (!pos.selectedCustomer || pos.cartItems.length === 0) return false;
+  const allowPartial = pos.session?.allow_partial_payment === 1;
+  if (allowPartial) return true;
+  return amountPaid.value >= payableTotal.value;
+});
 
 const quickCashPresets = computed(() => {
-  const total = pos.grandTotal;
+  const total = payableTotal.value;
   const presets = [
     Math.ceil(total / 100) * 100,
     Math.ceil(total / 500) * 500,
@@ -196,7 +228,13 @@ function setCashAmount(amount: number) {
 }
 
 function setExact() {
-  paymentMethods.value[primaryMethodIdx.value].amount = pos.grandTotal;
+  paymentMethods.value[primaryMethodIdx.value].amount = payableTotal.value;
+}
+
+function setCredit() {
+  paymentMethods.value.forEach((p) => {
+    p.amount = 0;
+  });
 }
 
 function onNumpadUpdate(_mode: string, value: string) {
@@ -235,7 +273,7 @@ async function submitPayment() {
       session: pos.session,
       customer: pos.selectedCustomer,
       cartItems: pos.cartItems,
-      payments: paymentMethods.value.filter((p) => p.amount > 0),
+      payments: paymentMethods.value,
       discount: pos.cartDiscount,
       additionalDiscount: pos.additionalDiscount,
       isOnline: network.isOnline,
@@ -344,6 +382,23 @@ function closeIfNotSubmitting() { if (!isSubmitting.value) close(); }
 }
 .paid-ok { color: #34d399 !important; font-weight: 700; }
 .payment-modal__change { color: #34d399; font-weight: 700; }
+.payment-modal__outstanding { color: var(--pos-warning); font-weight: 700; }
+.payment-modal__summary-row--outstanding {
+  background: rgba(217, 119, 6, 0.05);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin: 4px -10px;
+  border-left: 3px solid var(--pos-warning);
+}
+.payment-modal__quick-btn--credit {
+  background: rgba(217, 119, 6, 0.12);
+  border-color: var(--pos-warning);
+  color: var(--pos-warning);
+}
+.payment-modal__quick-btn--credit:hover {
+  border-color: var(--pos-warning);
+  background: rgba(217, 119, 6, 0.18);
+}
 .payment-modal__summary-row--divider {
   border-top: 1px dashed var(--pos-border);
   padding-top: 8px;
