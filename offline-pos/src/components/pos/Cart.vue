@@ -65,8 +65,11 @@
           <input
             type="number"
             :value="pos.cartDiscount"
+            :disabled="pos.session?.allow_discount_change !== 1"
+            :readonly="pos.session?.allow_discount_change !== 1"
             @input="pos.setAdditionalDiscountPercent(parseFloat(($event.target as HTMLInputElement).value) || 0)"
             class="cart__discount-input"
+            :class="{ 'disabled': pos.session?.allow_discount_change !== 1 }"
             step="0.01"
             min="0"
             max="100"
@@ -80,8 +83,11 @@
             <input
               type="number"
               :value="pos.additionalDiscount"
+              :disabled="pos.session?.allow_discount_change !== 1"
+              :readonly="pos.session?.allow_discount_change !== 1"
               @input="pos.setAdditionalDiscountAmount(parseFloat(($event.target as HTMLInputElement).value) || 0)"
               class="cart__discount-input cart__discount-input--amt"
+              :class="{ 'disabled': pos.session?.allow_discount_change !== 1 }"
               step="1"
               min="0"
               placeholder="0"
