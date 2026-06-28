@@ -112,9 +112,20 @@
         <span>{{ tax.description }} ({{ tax.rate }}%)</span>
         <span>{{ fmt(tax.tax_amount) }}</span>
       </div>
+      <!-- Grand Total (only show when rounding is enabled and adjustment exists) -->
+      <div v-if="pos.session?.disable_rounded_total !== 1 && pos.roundingAdjustment !== 0" class="cart__row">
+        <span>Grand Total</span>
+        <span>{{ fmt(pos.grandTotal) }}</span>
+      </div>
+      <!-- Rounding Adjustment -->
+      <div v-if="pos.session?.disable_rounded_total !== 1 && pos.roundingAdjustment !== 0" class="cart__row">
+        <span>Rounding</span>
+        <span>{{ fmt(pos.roundingAdjustment) }}</span>
+      </div>
+      <!-- Rounded/Final Total -->
       <div class="cart__row cart__row--grand">
         <span>Total</span>
-        <span>{{ fmt(pos.grandTotal) }}</span>
+        <span>{{ fmt(pos.roundedTotal) }}</span>
       </div>
     </div>
 
@@ -124,7 +135,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16">
           <polyline points="20 6 9 17 4 12"/>
         </svg>
-        {{ canCheckout ? `Pay  ${fmt(pos.grandTotal)}` : 'Pay' }}
+        {{ canCheckout ? `Pay  ${fmt(pos.roundedTotal)}` : 'Pay' }}
       </button>
     </div>
 

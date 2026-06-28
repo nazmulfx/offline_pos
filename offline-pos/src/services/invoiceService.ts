@@ -107,6 +107,8 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     net_total: payload.subtotal || 0,
     total: payload.subtotal || 0,
     grand_total: payload.grandTotal || 0,
+    disable_rounded_total: session.disable_rounded_total || 0,
+    rounded_total: session.disable_rounded_total === 1 ? 0 : Math.round(payload.grandTotal || 0),
     total_taxes_and_charges: payload.totalTaxes || 0,
     paid_amount: payments.reduce((acc, p) => acc + p.amount, 0),
     ...(hasProfileTaxes ? { taxes_and_charges: session.taxes_and_charges } : {}),

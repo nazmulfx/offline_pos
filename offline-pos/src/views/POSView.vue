@@ -235,6 +235,7 @@ onMounted(() => {
         pos.session.allow_partial_payment = profileData.allow_partial_payment;
         pos.session.allow_rate_change = profileData.allow_rate_change;
         pos.session.allow_discount_change = profileData.allow_discount_change;
+        pos.session.disable_rounded_total = profileData.disable_rounded_total;
       }
     }).catch((err) => {
       console.warn('[POSView] Failed to refresh POS Profile details:', err);

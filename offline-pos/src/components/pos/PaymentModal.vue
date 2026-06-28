@@ -26,13 +26,21 @@
               <span>{{ tax.description }} ({{ tax.rate }}%)</span>
               <span>{{ fmt(tax.tax_amount) }}</span>
             </div>
-            <div class="payment-modal__summary-row payment-modal__summary-row--divider">
-              <span class="font-bold">Grand Total</span>
-              <span class="payment-modal__grand">{{ fmt(pos.grandTotal) }}</span>
+            <div class="payment-modal__summary-row" :class="{ 'payment-modal__summary-row--divider': pos.session?.disable_rounded_total === 1 }">
+              <span :class="{ 'font-bold': pos.session?.disable_rounded_total === 1 }">Grand Total</span>
+              <span :class="{ 'payment-modal__grand': pos.session?.disable_rounded_total === 1 }">{{ fmt(pos.grandTotal) }}</span>
+            </div>
+            <div v-if="pos.session?.disable_rounded_total !== 1 && pos.roundingAdjustment !== 0" class="payment-modal__summary-row">
+              <span>Rounding Adjustment</span>
+              <span>{{ fmt(pos.roundingAdjustment) }}</span>
+            </div>
+            <div v-if="pos.session?.disable_rounded_total !== 1" class="payment-modal__summary-row payment-modal__summary-row--divider">
+              <span class="font-bold">Rounded Total</span>
+              <span class="payment-modal__grand">{{ fmt(payableTotal) }}</span>
             </div>
             <div class="payment-modal__summary-row">
               <span>Amount Paid</span>
-              <span :class="{ 'paid-ok': amountPaid >= pos.grandTotal }">{{ fmt(amountPaid) }}</span>
+              <span :class="{ 'paid-ok': amountPaid >= payableTotal }">{{ fmt(amountPaid) }}</span>
             </div>
             <div class="payment-modal__summary-row payment-modal__summary-row--outstanding" v-if="pos.session?.allow_partial_payment === 1 && outstandingAmount > 0">
               <span>Outstanding (Credit)</span>
@@ -113,7 +121,7 @@
               {{ 
                 isSubmitting 
                   ? 'Processing...' 
-                  : (amountPaid >= pos.grandTotal 
+                  : (amountPaid >= payableTotal 
                       ? (network.isOnline ? 'Submit Invoice' : 'Save Offline') 
                       : (amountPaid === 0 
                           ? (network.isOnline ? 'Submit Credit Sale' : 'Save Credit Sale') 
@@ -157,6 +165,8 @@ const pos = usePOSStore();
 const network = useNetworkStore();
 const sync = useSyncStore();
 
+const payableTotal = computed(() => pos.roundedTotal);
+
 // Payment methods from POS profile
 const paymentMethods = ref<Array<{ mode_of_payment: string; amount: number }>>([]);
 const primaryMethodIdx = ref(0);
@@ -181,7 +191,7 @@ function initPaymentMethods() {
   }
   // Auto-set cash to grand total
   if (paymentMethods.value.length > 0) {
-    paymentMethods.value[0].amount = pos.grandTotal;
+    paymentMethods.value[0].amount = payableTotal.value;
   }
   primaryMethodIdx.value = 0;
 }
@@ -190,21 +200,21 @@ const amountPaid = computed(() =>
   paymentMethods.value.reduce((sum, m) => sum + (m.amount || 0), 0)
 );
 
-const change = computed(() => Math.max(0, amountPaid.value - pos.grandTotal));
+const change = computed(() => Math.max(0, amountPaid.value - payableTotal.value));
 
 const netTotal = computed(() => pos.subtotal - pos.totalDiscount);
 
-const outstandingAmount = computed(() => Math.max(0, pos.grandTotal - amountPaid.value));
+const outstandingAmount = computed(() => Math.max(0, payableTotal.value - amountPaid.value));
 
 const canSubmit = computed(() => {
   if (!pos.selectedCustomer || pos.cartItems.length === 0) return false;
   const allowPartial = pos.session?.allow_partial_payment === 1;
   if (allowPartial) return true;
-  return amountPaid.value >= pos.grandTotal;
+  return amountPaid.value >= payableTotal.value;
 });
 
 const quickCashPresets = computed(() => {
-  const total = pos.grandTotal;
+  const total = payableTotal.value;
   const presets = [
     Math.ceil(total / 100) * 100,
     Math.ceil(total / 500) * 500,
@@ -218,7 +228,7 @@ function setCashAmount(amount: number) {
 }
 
 function setExact() {
-  paymentMethods.value[primaryMethodIdx.value].amount = pos.grandTotal;
+  paymentMethods.value[primaryMethodIdx.value].amount = payableTotal.value;
 }
 
 function setCredit() {

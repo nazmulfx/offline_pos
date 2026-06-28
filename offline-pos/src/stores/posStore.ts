@@ -77,6 +77,7 @@ export interface POSSession {
   allow_partial_payment?: number;
   allow_rate_change?: number;
   allow_discount_change?: number;
+  disable_rounded_total?: number;
 }
 
 
@@ -585,6 +586,21 @@ export const usePOSStore = defineStore('pos', () => {
     return Math.max(0, rawTotal);
   });
 
+  const roundedTotal = computed(() => {
+    const total = grandTotal.value;
+    if (session.value?.disable_rounded_total === 1) {
+      return total;
+    }
+    return Math.round(total);
+  });
+
+  const roundingAdjustment = computed(() => {
+    if (session.value?.disable_rounded_total === 1) {
+      return 0;
+    }
+    return parseFloat((roundedTotal.value - grandTotal.value).toFixed(2));
+  });
+
   const cartCount = computed(() =>
     cartItems.value.reduce((sum, ci) => sum + ci.qty, 0)
   );
@@ -692,6 +708,7 @@ export const usePOSStore = defineStore('pos', () => {
       allow_partial_payment: profileData.allow_partial_payment,
       allow_rate_change: profileData.allow_rate_change,
       allow_discount_change: profileData.allow_discount_change,
+      disable_rounded_total: profileData.disable_rounded_total,
     };
 
     // Load and cache warehouses list
@@ -861,6 +878,6 @@ export const usePOSStore = defineStore('pos', () => {
     // designed alert
     activeAlert, showAlert, closeAlert,
     // Totals
-    subtotal, totalDiscount, grandTotal, cartCount, taxes, totalTaxes,
+    subtotal, totalDiscount, grandTotal, roundedTotal, roundingAdjustment, cartCount, taxes, totalTaxes,
   };
 });
