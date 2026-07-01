@@ -64,6 +64,24 @@ watch(
       // Re-refresh CSRF after sync so subsequent UI-triggered API calls
       // (e.g. fetchCustomers) also use a fresh token, not the pre-sync one.
       await syncStore.refreshCSRFToken();
+
+      // Refresh local IndexedDB master data after syncing
+      try {
+        const { usePOSStore } = await import('./stores/posStore');
+        const posStore = usePOSStore(pinia);
+        if (posStore.session) {
+          console.log('[App] Back online — reloading master data (Items & Customers)...');
+          await Promise.all([
+            posStore.loadItems(true),
+            posStore.loadCustomers('')
+          ]);
+          console.log('[App] Master data reloaded. Triggering full catalog background pre-fetch...');
+          posStore.prefetchAllItems();
+          posStore.prefetchAllCustomers();
+        }
+      } catch (err) {
+        console.error('[App] Failed to reload master data on reconnection:', err);
+      }
     }
   }
 );
@@ -93,3 +111,33 @@ router.beforeEach(async (to, _from, next) => {
 });
 
 app.mount("#app");
+
+// ─── Service Worker Registration ───────────────────────────
+if ('serviceWorker' in navigator && !import.meta.env.DEV) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/offline-pos/sw.js', { scope: '/offline-pos/' })
+      .then((reg) => {
+        console.log('[PWA] Service Worker registered with scope:', reg.scope);
+
+        // Check for updates on load
+        if (reg.waiting) {
+          window.dispatchEvent(new CustomEvent('sw-update-available', { detail: reg }));
+        }
+
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (newWorker) {
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                console.log('[PWA] New service worker version available.');
+                window.dispatchEvent(new CustomEvent('sw-update-available', { detail: reg }));
+              }
+            });
+          }
+        });
+      })
+      .catch((err) => {
+        console.error('[PWA] Service Worker registration failed:', err);
+      });
+  });
+}

@@ -735,6 +735,160 @@ export const usePOSStore = defineStore('pos', () => {
 
     // Pre-load data
     await Promise.all([loadItems(true), loadCustomers('')]);
+
+    // Start background pre-fetch of all items and customers for offline completeness
+    prefetchAllItems();
+    prefetchAllCustomers();
+  }
+
+  async function prefetchAllItems() {
+    if (!session.value || !network.isOnline) return;
+    console.log('[POSStore] Starting background catalog pre-fetch...');
+    
+    let start = 0;
+    const batchSize = 500;
+    let hasMore = true;
+    
+    while (hasMore) {
+      try {
+        const result = await fetchItems({
+          search: '',
+          group: '',
+          priceList: session.value.price_list,
+          posProfile: session.value.pos_profile,
+          start: start,
+          pageLength: batchSize,
+          isOnline: true,
+        });
+        
+        if (result.length > 0) {
+          const itemCodes = result.map((i: any) => i.item_code);
+          const priceList = session.value.price_list;
+          
+          const [uomDetails, priceDetails] = await Promise.all([
+            call('frappe.client.get_list', {
+              doctype: 'UOM Conversion Detail',
+              parent: 'Item',
+              filters: { parent: ['in', itemCodes] },
+              fields: ['parent', 'uom', 'conversion_factor'],
+              limit_page_length: 5000,
+            }).catch(() => []),
+            call('frappe.client.get_list', {
+              doctype: 'Item Price',
+              filters: {
+                item_code: ['in', itemCodes],
+                price_list: priceList,
+              },
+              fields: ['item_code', 'uom', 'price_list_rate'],
+              limit_page_length: 5000,
+            }).catch(() => [])
+          ]);
+          
+          const uomList = uomDetails || [];
+          const priceListRecords = priceDetails || [];
+          const db = await openPOSDB();
+          const tx = db.transaction('items', 'readwrite');
+          const store = tx.objectStore('items');
+          
+          result.forEach((item: any) => {
+            const uoms = uomList
+              .filter((ud: any) => ud.parent === item.item_code)
+              .map((ud: any) => ({
+                uom: ud.uom,
+                conversion_factor: ud.conversion_factor,
+              }));
+            
+            if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
+              uoms.push({ uom: item.uom, conversion_factor: 1 });
+            }
+            if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
+              uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
+            }
+            item.uoms = uoms;
+            
+            const pricesMap: Record<string, number> = {};
+            if (item.price_list_rate !== undefined) {
+              pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
+            }
+            priceListRecords
+              .filter((pd: any) => pd.item_code === item.item_code)
+              .forEach((pd: any) => {
+                if (pd.uom && pd.price_list_rate !== undefined) {
+                  pricesMap[pd.uom] = pd.price_list_rate;
+                }
+              });
+            item.prices = pricesMap;
+            item.price_list_name = priceList;
+            
+            store.put(item);
+          });
+          
+          await new Promise<void>((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          });
+          
+          console.log(`[POSStore] Pre-fetched and cached items ${start} to ${start + result.length}`);
+        }
+        
+        if (result.length < batchSize) {
+          hasMore = false;
+        } else {
+          start += batchSize;
+          await new Promise(r => setTimeout(r, 250)); // small delay to avoid server hammering
+        }
+      } catch (err) {
+        console.error('[POSStore] Background item pre-fetch batch failed:', err);
+        hasMore = false;
+      }
+    }
+    console.log('[POSStore] Background catalog pre-fetch finished.');
+  }
+
+  async function prefetchAllCustomers() {
+    if (!session.value || !network.isOnline) return;
+    console.log('[POSStore] Starting background customer pre-fetch...');
+    
+    let start = 0;
+    const batchSize = 500;
+    let hasMore = true;
+    const customerGroups = session.value.customer_groups || [];
+    
+    while (hasMore) {
+      try {
+        const filters: Record<string, any> = { disabled: 0 };
+        if (customerGroups.length) {
+          filters.customer_group = ['in', customerGroups];
+        }
+        
+        const result = await call('frappe.client.get_list', {
+          doctype: 'Customer',
+          filters,
+          fields: ['name', 'customer_name', 'mobile_no', 'email_id', 'customer_group', 'loyalty_program'],
+          limit_start: start,
+          limit_page_length: batchSize,
+        });
+        
+        const customersList: any[] = result || [];
+        
+        if (customersList.length > 0) {
+          const { cacheCustomers } = await import('../db/posDB');
+          await cacheCustomers(customersList);
+          console.log(`[POSStore] Pre-fetched and cached customers ${start} to ${start + customersList.length}`);
+        }
+        
+        if (customersList.length < batchSize) {
+          hasMore = false;
+        } else {
+          start += batchSize;
+          await new Promise(r => setTimeout(r, 200));
+        }
+      } catch (err) {
+        console.error('[POSStore] Background customer pre-fetch batch failed:', err);
+        hasMore = false;
+      }
+    }
+    console.log('[POSStore] Background customer pre-fetch finished.');
   }
 
   async function fetchItemDetailsOfflineData(itemCode: string): Promise<{
@@ -865,10 +1019,10 @@ export const usePOSStore = defineStore('pos', () => {
     session, isSessionLoading, initSession, clearSession,
     // Items
     items, itemGroups, selectedGroup, searchTerm, itemsLoading,
-    loadItems, searchItems, filterByGroup,
+    loadItems, searchItems, filterByGroup, prefetchAllItems,
     // Customers
     customers, customerSearch, customersLoading,
-    loadCustomers, selectCustomer,
+    loadCustomers, selectCustomer, prefetchAllCustomers,
     // Cart
     cartItems, selectedCustomer, cartDiscount, additionalDiscount, discountType,
     selectedItemIdx, warehouses, selectedCartItem,

@@ -26,7 +26,7 @@ export default async function call(
 
   // Attach CSRF token if available (set by Frappe on page load)
   const csrfToken = (window as any).csrf_token;
-  if (csrfToken && csrfToken !== '{{ csrf_token }}') {
+  if (csrfToken && !csrfToken.includes('{{')) {
     headers['X-Frappe-CSRF-Token'] = csrfToken;
   }
 

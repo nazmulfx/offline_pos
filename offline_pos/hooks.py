@@ -252,3 +252,5 @@ override_whitelisted_methods = {
 
 
 website_route_rules = [{'from_route': '/offline-pos/<path:app_path>', 'to_route': 'offline-pos'}]
+
+page_renderer = ["offline_pos.pwa.PWARenderer"]
