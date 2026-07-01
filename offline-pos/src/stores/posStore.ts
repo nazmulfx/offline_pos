@@ -135,10 +135,10 @@ export const usePOSStore = defineStore('pos', () => {
   const warehouses = ref<string[]>([]);
 
   // ─── Designed Alert Modal ──────────────────────────────────────────────────
-  const activeAlert = ref<{ title: string; message: string } | null>(null);
+  const activeAlert = ref<{ title: string; message: string; type?: 'success' | 'warning' | 'info' | 'error' } | null>(null);
 
-  function showAlert(title: string, message: string) {
-    activeAlert.value = { title, message };
+  function showAlert(title: string, message: string, type?: 'success' | 'warning' | 'info' | 'error') {
+    activeAlert.value = { title, message, type };
   }
 
   function closeAlert() {

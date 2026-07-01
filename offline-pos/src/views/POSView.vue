@@ -46,6 +46,28 @@
           {{ network.isOnline ? 'Online' : 'Offline' }}
         </div>
 
+        <!-- Sync to Server -->
+        <button
+          v-if="network.isOnline"
+          class="pos-topbar__refresh-btn"
+          @click="manualDataRefresh"
+          :disabled="isRefreshingData"
+          title="Sync offline transactions and refresh data from server"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            width="14"
+            height="14"
+            :class="{ rotating: isRefreshingData }"
+          >
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+          </svg>
+          {{ isRefreshingData ? 'Syncing...' : 'Sync to Server' }}
+        </button>
+
         <!-- Theme Toggle -->
         <button class="pos-topbar__theme-btn" @click="toggleTheme" :title="isDark ? 'Switch to Light' : 'Switch to Dark'">
           <!-- Moon icon (dark mode) -->
@@ -193,6 +215,35 @@ const closedToast = ref<string | null>(null);
 const isLoggingOut = ref(false);
 const $auth = inject<any>('$auth');
 const currentTime = ref('');
+
+const isRefreshingData = ref(false);
+
+async function manualDataRefresh() {
+  if (isRefreshingData.value || !network.isOnline) return;
+  isRefreshingData.value = true;
+  try {
+    pos.showAlert('Syncing Data', 'Syncing offline transactions and updating local catalog from the server...', 'info');
+    
+    // 1. Upload offline queue
+    await sync.syncAll();
+    
+    // 2. Download latest items/customers
+    await Promise.all([
+      pos.loadItems(true),
+      pos.loadCustomers('')
+    ]);
+    
+    pos.prefetchAllItems();
+    pos.prefetchAllCustomers();
+    
+    pos.showAlert('Sync Success', 'POS transactions, catalog, and customer data are fully synchronized!', 'success');
+  } catch (err) {
+    console.error('[POSView] manualDataRefresh error:', err);
+    pos.showAlert('Sync Error', 'Failed to complete synchronization with the server. Please check your internet connection.', 'error');
+  } finally {
+    isRefreshingData.value = false;
+  }
+}
 
 let clockTimer: ReturnType<typeof setInterval>;
 
@@ -571,6 +622,38 @@ async function handleLogout() {
   background: rgba(248,113,113,0.08);
 }
 .pos-topbar__logout-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pos-topbar__refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--pos-border);
+  background: transparent;
+  color: var(--pos-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.pos-topbar__refresh-btn:hover:not(:disabled) {
+  border-color: #6366f1;
+  color: #6366f1;
+  background: rgba(99,102,241,0.08);
+}
+.pos-topbar__refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.rotating {
+  animation: spin 1s linear infinite;
+}
 /* ─── Main Layout ────────────────────────────────────────── */
 .pos-main {
   display: grid;

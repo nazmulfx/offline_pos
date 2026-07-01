@@ -6,14 +6,27 @@
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="pos.activeAlert" class="alert-overlay" @click.self="pos.closeAlert">
-        <div class="alert-modal">
+        <div class="alert-modal" :class="`alert-modal--${alertType}`">
           <div class="alert-modal__icon">
-            <svg v-if="isStockAlert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="28" height="28">
+            <!-- Success icon -->
+            <svg v-if="alertType === 'success'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="28" height="28">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+              <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+            <!-- Info icon -->
+            <svg v-else-if="alertType === 'info'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="28" height="28">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+            <!-- Stock Alert icon -->
+            <svg v-else-if="isStockAlert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="28" height="28">
               <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
               <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
               <line x1="12" y1="22.08" x2="12" y2="12" />
               <line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="2" />
             </svg>
+            <!-- General Warning/Error icon -->
             <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="28" height="28">
               <circle cx="12" cy="12" r="10"/>
               <line x1="12" y1="8" x2="12" y2="12"/>
@@ -39,6 +52,20 @@ const pos = usePOSStore();
 const isStockAlert = computed(() => {
   const title = pos.activeAlert?.title || '';
   return /stock/i.test(title);
+});
+
+const alertType = computed(() => {
+  if (pos.activeAlert?.type) {
+    return pos.activeAlert.type;
+  }
+  const title = pos.activeAlert?.title || '';
+  if (/success|completed|saved/i.test(title)) {
+    return 'success';
+  }
+  if (/syncing|loading|info/i.test(title)) {
+    return 'info';
+  }
+  return 'error';
 });
 </script>
 
@@ -74,8 +101,6 @@ const isStockAlert = computed(() => {
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -101,23 +126,60 @@ const isStockAlert = computed(() => {
   padding: 11px;
   border-radius: 10px;
   border: none;
-  background: #ef4444;
   color: #fff;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
-}
-
-.alert-modal__btn:hover {
-  background: #dc2626;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(239, 68, 68, 0.3);
 }
 
 .alert-modal__btn:active {
   transform: scale(0.98);
+}
+
+/* Success Alert Styles */
+.alert-modal--success .alert-modal__icon {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+}
+.alert-modal--success .alert-modal__btn {
+  background: #22c55e;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.2);
+}
+.alert-modal--success .alert-modal__btn:hover {
+  background: #16a34a;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(34, 197, 94, 0.3);
+}
+
+/* Info Alert Styles */
+.alert-modal--info .alert-modal__icon {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+}
+.alert-modal--info .alert-modal__btn {
+  background: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+}
+.alert-modal--info .alert-modal__btn:hover {
+  background: #2563eb;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.3);
+}
+
+/* Error/Warning Alert Styles (Default) */
+.alert-modal--error .alert-modal__icon {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+.alert-modal--error .alert-modal__btn {
+  background: #ef4444;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+}
+.alert-modal--error .alert-modal__btn:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(239, 68, 68, 0.3);
 }
 
 .modal-enter-active, .modal-leave-active {
