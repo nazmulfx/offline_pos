@@ -263,7 +263,8 @@ async function submitPayment() {
   // Open blank print window synchronously inside click event handler to bypass popup blockers
   let printWindow: Window | null = null;
   const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
-  if (autoPrint) {
+  const openDialogue = pos.session?.open_print_dialogue_on_invoice_creation === 1;
+  if (openDialogue && !autoPrint) {
     printWindow = window.open('about:blank', '_blank');
   }
 

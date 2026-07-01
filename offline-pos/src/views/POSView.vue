@@ -312,6 +312,7 @@ onMounted(() => {
         pos.session.apply_discount_on = profileData.apply_discount_on || 'Grand Total';
         pos.session.print_format = profileData.print_format || '';
         pos.session.print_receipt_on_order_complete = profileData.print_receipt_on_order_complete ? 1 : 0;
+        pos.session.open_print_dialogue_on_invoice_creation = profileData.open_print_dialogue_on_invoice_creation ? 1 : 0;
         pos.session.allow_partial_payment = profileData.allow_partial_payment;
         pos.session.allow_rate_change = profileData.allow_rate_change;
         pos.session.allow_discount_change = profileData.allow_discount_change;
@@ -334,12 +335,83 @@ function updateClock() {
   });
 }
 
+function printHtmlViaIframe(html: string) {
+  const oldIframe = document.getElementById('pos-print-iframe');
+  if (oldIframe) {
+    oldIframe.remove();
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.id = 'pos-print-iframe';
+  iframe.style.position = 'fixed';
+  iframe.style.width = '0px';
+  iframe.style.height = '0px';
+  iframe.style.border = 'none';
+  iframe.style.bottom = '0px';
+  iframe.style.right = '0px';
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow?.document;
+  if (doc) {
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const doPrint = () => {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }
+    };
+
+    iframe.contentWindow.addEventListener('afterprint', () => {
+      iframe.remove();
+    });
+
+    setTimeout(doPrint, 500);
+  }
+}
+
+function printUrlViaIframe(url: string) {
+  const oldIframe = document.getElementById('pos-print-iframe');
+  if (oldIframe) {
+    oldIframe.remove();
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.id = 'pos-print-iframe';
+  iframe.style.position = 'fixed';
+  iframe.style.width = '0px';
+  iframe.style.height = '0px';
+  iframe.style.border = 'none';
+  iframe.style.bottom = '0px';
+  iframe.style.right = '0px';
+  iframe.src = url;
+  document.body.appendChild(iframe);
+
+  iframe.onload = () => {
+    const doPrint = () => {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }
+    };
+    
+    iframe.contentWindow?.addEventListener('afterprint', () => {
+      iframe.remove();
+    });
+
+    setTimeout(doPrint, 500);
+  };
+}
+
 async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any, preOpenedWindow?: Window | null) {
   successToast.value = { name: invoiceName, offline };
   setTimeout(() => { successToast.value = null; }, 5000);
 
   const printFormat = pos.session?.print_format || '';
   const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
+  const openDialogue = pos.session?.open_print_dialogue_on_invoice_creation === 1;
 
   if (autoPrint) {
     if (!offline) {
@@ -358,20 +430,61 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
           let html = await resp.text();
           if (html.includes('print-format')) {
             success = true;
+            const baseTag = `<base href="${window.location.origin}">`;
+            if (html.includes('<head>')) {
+              html = html.replace('<head>', '<head>' + baseTag);
+            } else {
+              html = baseTag + html;
+            }
+            printHtmlViaIframe(html);
+          }
+        }
+
+        if (!success) {
+          const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+          printUrlViaIframe(fallbackUrl);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch and inject printview for iframe print:', err);
+        const doctype = pos.session?.invoice_type || 'POS Invoice';
+        const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+        printUrlViaIframe(fallbackUrl);
+      }
+    } else if (doc) {
+      const cachedPF = localStorage.getItem(`print_format_${printFormat}`);
+      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: printFormat };
+      printInvoiceOffline(doc, pfData, null, true);
+    }
+  } else if (openDialogue) {
+    if (!offline) {
+      try {
+        const doctype = pos.session?.invoice_type || 'POS Invoice';
+        const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}`;
+        const resp = await fetch(printUrl, {
+          headers: {
+            'X-Frappe-Site-Name': window.location.hostname,
+          },
+          credentials: 'include',
+        });
+        
+        let success = false;
+        if (resp.ok && !resp.redirected && !resp.url.includes('/login')) {
+          let html = await resp.text();
+          if (html.includes('print-format')) {
+            success = true;
             
-            // Inject base href to resolve relative assets and script to auto-print/close
             const baseTag = `<base href="${window.location.origin}">`;
             const closeScript = `
-              <script` + `>
-                window.onload = function() {
-                  setTimeout(function() {
-                    window.print();
-                  }, 500);
+              \x3Cscript>
+                function doPrint() {
+                  window.focus();
+                  window.print();
                 }
                 window.addEventListener('afterprint', function() {
                   window.close();
                 });
-              </script` + `>
+                setTimeout(doPrint, 500);
+              \x3C/script>
             `;
             
             if (html.includes('<head>')) {
@@ -396,7 +509,6 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         }
 
         if (!success) {
-          // Fallback to direct redirect
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
           if (preOpenedWindow) {
             preOpenedWindow.location.href = fallbackUrl;
@@ -417,7 +529,7 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
     } else if (doc) {
       const cachedPF = localStorage.getItem(`print_format_${printFormat}`);
       const pfData = cachedPF ? JSON.parse(cachedPF) : { name: printFormat };
-      printInvoiceOffline(doc, pfData, preOpenedWindow);
+      printInvoiceOffline(doc, pfData, preOpenedWindow, false);
     }
   } else if (preOpenedWindow) {
     preOpenedWindow.close();

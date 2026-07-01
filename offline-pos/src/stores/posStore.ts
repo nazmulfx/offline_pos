@@ -74,6 +74,7 @@ export interface POSSession {
   hide_images?: number;
   print_format?: string;
   print_receipt_on_order_complete?: number;
+  open_print_dialogue_on_invoice_creation?: number;
   allow_partial_payment?: number;
   allow_rate_change?: number;
   allow_discount_change?: number;
@@ -705,6 +706,7 @@ export const usePOSStore = defineStore('pos', () => {
       hide_images: profileData.hide_images || 0,
       print_format: profileData.print_format || '',
       print_receipt_on_order_complete: profileData.print_receipt_on_order_complete || 0,
+      open_print_dialogue_on_invoice_creation: profileData.open_print_dialogue_on_invoice_creation || 0,
       allow_partial_payment: profileData.allow_partial_payment,
       allow_rate_change: profileData.allow_rate_change,
       allow_discount_change: profileData.allow_discount_change,

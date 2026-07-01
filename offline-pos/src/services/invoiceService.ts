@@ -358,9 +358,33 @@ export async function getPastOrders(
   );
   return result || [];
 }
-export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Window | null) {
-  const printWindow = preOpenedWindow || window.open('', '_blank');
-  if (!printWindow) return;
+export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Window | null, useIframe: boolean = false) {
+  let printWindow: Window | null = null;
+  let printIframe: HTMLIFrameElement | null = null;
+
+  if (useIframe) {
+    const oldIframe = document.getElementById('pos-print-iframe');
+    if (oldIframe) {
+      oldIframe.remove();
+    }
+    printIframe = document.createElement('iframe');
+    printIframe.id = 'pos-print-iframe';
+    printIframe.style.position = 'fixed';
+    printIframe.style.width = '0px';
+    printIframe.style.height = '0px';
+    printIframe.style.border = 'none';
+    printIframe.style.bottom = '0px';
+    printIframe.style.right = '0px';
+    document.body.appendChild(printIframe);
+  } else {
+    printWindow = preOpenedWindow || window.open('', '_blank');
+    if (!printWindow) return;
+  }
+
+  const targetWindow = useIframe ? printIframe?.contentWindow : printWindow;
+  if (!targetWindow) return;
+
+  const targetDocument = targetWindow.document;
 
   const company = doc.company || '';
   const name = doc.name || doc.invoiceName || '';
@@ -472,18 +496,42 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
       finalHtml = finalHtml.replace(/999,?666\.66/g, formatCurrency(paidAmount));
 
       // 3. Ensure automatic print triggering
-      if (!finalHtml.includes('window.print()')) {
-        finalHtml = finalHtml.replace('</body>', '<script>window.onload = function() { window.print(); }</script></body>');
+      const closeScript = useIframe ? `
+        <script>
+          function doPrint() {
+            window.focus();
+            window.print();
+          }
+          setTimeout(doPrint, 500);
+        </script>
+      ` : `
+        <script>
+          function doPrint() {
+            window.focus();
+            window.print();
+          }
+          window.addEventListener('afterprint', function() {
+            window.close();
+          });
+          setTimeout(doPrint, 500);
+        </script>
+      `;
+
+      if (finalHtml.includes('</body>')) {
+        finalHtml = finalHtml.replace('</body>', closeScript + '</body>');
+      } else {
+        finalHtml += closeScript;
       }
 
-      printWindow.document.open();
-      printWindow.document.write(finalHtml);
-      printWindow.document.close();
-      setTimeout(() => {
-        printWindow.focus();
-        printWindow.print();
-        printWindow.close();
-      }, 250);
+      targetDocument.open();
+      targetDocument.write(finalHtml);
+      targetDocument.close();
+
+      if (useIframe && printIframe) {
+        targetWindow.addEventListener('afterprint', () => {
+          printIframe?.remove();
+        });
+      }
       return;
     } catch (e) {
       console.warn('[InvoiceService] Failed to render cached HTML print format, falling back to basic layout:', e);
@@ -534,6 +582,27 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
   }
 
   const customCSS = pfData?.css || '';
+
+  const closeScriptFallback = useIframe ? `
+    <script>
+      function doPrint() {
+        window.focus();
+        window.print();
+      }
+      setTimeout(doPrint, 500);
+    </script>
+  ` : `
+    <script>
+      function doPrint() {
+        window.focus();
+        window.print();
+      }
+      window.addEventListener('afterprint', function() {
+        window.close();
+      });
+      setTimeout(doPrint, 500);
+    </script>
+  `;
 
   const html = `
     <html>
@@ -643,24 +712,18 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
           <div style="margin-top: 5px; font-size: 9px; color: #999;">Offline Transaction - Will sync automatically when online.</div>
         </div>
 
-        <script>
-          window.onload = function() {
-            window.print();
-          }
-          window.addEventListener('afterprint', function() {
-            window.close();
-          });
-        </script>
+        ${closeScriptFallback}
       </body>
     </html>
   `;
 
-  printWindow.document.open();
-  printWindow.document.write(html);
-  printWindow.document.close();
-  setTimeout(() => {
-    printWindow.focus();
-    printWindow.print();
-    printWindow.close();
-  }, 250);
+  targetDocument.open();
+  targetDocument.write(html);
+  targetDocument.close();
+
+  if (useIframe && printIframe) {
+    targetWindow.addEventListener('afterprint', () => {
+      printIframe?.remove();
+    });
+  }
 }
