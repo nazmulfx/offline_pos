@@ -978,28 +978,48 @@ export const usePOSStore = defineStore('pos', () => {
   async function decrementStock(itemsToDecrement: CartItem[]) {
     try {
       const db = await openPOSDB();
-      const tx = db.transaction('items', 'readwrite');
-      const store = tx.objectStore('items');
+
+      // Step 1: Read all cached items in a single readonly transaction first
+      const cachedItemsMap: Record<string, any> = {};
+      const readTx = db.transaction('items', 'readonly');
+      const readStore = readTx.objectStore('items');
+
+      const readPromises = itemsToDecrement.map((cartItem) => {
+        return new Promise<void>((resolve) => {
+          const req = readStore.get(cartItem.item_code);
+          req.onsuccess = () => {
+            if (req.result) {
+              cachedItemsMap[cartItem.item_code] = req.result;
+            }
+            resolve();
+          };
+          req.onerror = () => resolve();
+        });
+      });
+      await Promise.all(readPromises);
+
+      // Step 2: Write updates in a single, synchronous readwrite transaction
+      const writeTx = db.transaction('items', 'readwrite');
+      const writeStore = writeTx.objectStore('items');
 
       for (const cartItem of itemsToDecrement) {
+        // Update reactive state
         const matchedItem = items.value.find((i) => i.item_code === cartItem.item_code);
         if (matchedItem && matchedItem.is_stock_item) {
           matchedItem.actual_qty = Math.max(0, matchedItem.actual_qty - cartItem.qty);
+        }
 
-          const cachedItem = await new Promise<any>((resolve) => {
-            const req = store.get(cartItem.item_code);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => resolve(null);
-          });
-          if (cachedItem) {
-            cachedItem.actual_qty = Math.max(0, (cachedItem.actual_qty || 0) - cartItem.qty);
-            store.put(cachedItem);
-          }
+        // Update local DB cache
+        const cachedItem = cachedItemsMap[cartItem.item_code];
+        if (cachedItem && cachedItem.is_stock_item) {
+          cachedItem.actual_qty = Math.max(0, (cachedItem.actual_qty || 0) - cartItem.qty);
+          writeStore.put(cachedItem);
         }
       }
+
       await new Promise<void>((resolve, reject) => {
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
+        writeTx.oncomplete = () => resolve();
+        writeTx.onerror = () => reject(writeTx.error);
       });
     } catch (e) {
       console.warn('[POSStore] Failed to decrement local stock:', e);
