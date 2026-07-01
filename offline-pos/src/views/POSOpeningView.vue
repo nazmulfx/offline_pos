@@ -190,7 +190,7 @@ const errorMsg = ref('');
 
 // True when error is specifically a duplicate-session validation
 const isSessionOpenError = computed(() =>
-  !!errorMsg.value && /is open/i.test(errorMsg.value)
+  !!errorMsg.value && /is open/i.test(errorMsg.value) && !errorMsg.value.includes('currently open by')
 );
 
 // Form state
@@ -253,6 +253,37 @@ async function loadPaymentMethods() {
       mode_of_payment: p.mode_of_payment,
       opening_amount: 0,
     }));
+
+    // Check if there is an active session on the server for this POS Profile
+    const activeSessions = await call('frappe.client.get_list', {
+      doctype: 'POS Opening Entry',
+      filters: {
+        pos_profile: posProfile.value,
+        docstatus: 1,
+        pos_closing_entry: ['in', ['', null]]
+      },
+      fields: ['name', 'user', 'company', 'pos_profile', 'period_start_date'],
+      limit_page_length: 1
+    });
+
+    if (activeSessions && activeSessions.length > 0) {
+      const activeSession = activeSessions[0];
+      const userCookie = document.cookie.match(/user_id=([^;]+)/);
+      const currentUser = userCookie ? decodeURIComponent(userCookie[1]) : '';
+
+      if (activeSession.user && currentUser && activeSession.user.toLowerCase() === currentUser.toLowerCase()) {
+        // It's the current user's session! Show the "Continue Session" card
+        existingEntry.value = activeSession;
+      } else {
+        // It belongs to a different user! Show a warning and prevent opening
+        errorMsg.value = `${posProfile.value} is currently open by ${activeSession.user}. Please close that POS or cancel the existing POS Opening Entry to create a new one.`;
+      }
+    } else {
+      // Clear any previous duplicate active session errors
+      if (errorMsg.value && (errorMsg.value.includes('is currently open by') || errorMsg.value.includes('is open'))) {
+        errorMsg.value = '';
+      }
+    }
   } catch (err) {
     console.error('[POSOpening] loadPaymentMethods error:', err);
   }
