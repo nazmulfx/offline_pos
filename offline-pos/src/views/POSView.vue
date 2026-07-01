@@ -164,7 +164,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, inject } from 'vue';
+import { ref, onMounted, onBeforeUnmount, inject, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { usePOSStore } from '../stores/posStore';
 import { useNetworkStore } from '../stores/networkStore';
@@ -177,7 +177,7 @@ import ItemDetails from '../components/pos/ItemDetails.vue';
 import PaymentModal from '../components/pos/PaymentModal.vue';
 import POSClosingModal from '../components/pos/POSClosingModal.vue';
 import OfflineSyncPanel from '../components/pos/OfflineSyncPanel.vue';
-import { getPOSProfileData, printInvoiceOffline } from '../services/invoiceService';
+import { getPOSProfileData, printInvoiceOffline, checkOpeningEntry } from '../services/invoiceService';
 
 const router = useRouter();
 const pos = usePOSStore();
@@ -207,11 +207,40 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
   }
 }
 
+async function validateSessionOnline() {
+  if (!network.isOnline || !pos.session) return;
+  try {
+    const userCookie = document.cookie.match(/user_id=([^;]+)/);
+    const user = userCookie ? decodeURIComponent(userCookie[1]) : '';
+    if (!user) return;
+
+    const entries = await checkOpeningEntry(user);
+    const isValid = entries.some((e: any) => e.name === pos.session?.pos_opening);
+
+    if (!isValid) {
+      if (confirm('Your local POS session is not active or has been closed on the server. Click OK to clear the inactive session and start a new one.')) {
+        pos.clearSession();
+        localStorage.removeItem('pos_session');
+        router.replace({ name: 'POSOpening' });
+      }
+    }
+  } catch (err) {
+    console.warn('[POSView] Failed to validate session online:', err);
+  }
+}
+
+watch(() => network.isOnline, (isOnline) => {
+  if (isOnline) {
+    validateSessionOnline();
+  }
+});
+
 onMounted(() => {
   if (!pos.session) {
     router.replace({ name: 'POSOpening' });
     return;
   }
+  validateSessionOnline();
   updateClock();
   clockTimer = setInterval(updateClock, 1000);
   sync.refreshPendingCount();

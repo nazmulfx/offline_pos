@@ -68,6 +68,15 @@
           </select>
         </div>
 
+        <div v-if="posProfile && balanceDetails.length === 0 && !isLoading" class="pos-opening__error" style="margin-bottom: 15px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="flex-shrink:0">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>This POS Profile has no payment methods configured. Please configure at least one Mode of Payment in the POS Profile in ERPNext first.</span>
+        </div>
+
         <!-- Opening Balance table -->
         <div v-if="balanceDetails.length > 0" class="pos-opening__balance">
           <label class="pos-opening__label">Opening Balance</label>
@@ -125,7 +134,7 @@
 
         <button
           class="pos-opening__btn pos-opening__btn--primary"
-          :disabled="!company || !posProfile || isSubmitting || isSessionOpenError"
+          :disabled="!company || !posProfile || isSubmitting || isSessionOpenError || balanceDetails.length === 0"
           @click="createOpeningEntry"
         >
           <span v-if="isSubmitting" class="spinner-sm"></span>
@@ -192,6 +201,10 @@ const posProfiles = ref<any[]>([]);
 const balanceDetails = ref<Array<{ mode_of_payment: string; opening_amount: number }>>([]);
 
 onMounted(async () => {
+  if (pos.session) {
+    router.replace({ name: 'POS' });
+    return;
+  }
   await loadCompanies();
   await checkExistingSession();
 });
