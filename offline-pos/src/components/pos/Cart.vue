@@ -395,18 +395,34 @@ function confirmClear() {
   border-color: var(--pos-accent);
 }
 .cart__discount-prefix-wrap {
-  position: relative;
   display: flex;
   align-items: center;
+  background: var(--pos-bg);
+  border: 1px solid var(--pos-border);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.cart__discount-prefix-wrap:focus-within {
+  border-color: var(--pos-accent);
 }
 .cart__discount-prefix {
-  position: absolute;
-  left: 10px;
-  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--pos-surface-hover);
+  border-right: 1px solid var(--pos-border);
+  font-size: 11px;
+  font-weight: 700;
   color: var(--pos-text-muted);
-  pointer-events: none;
+  user-select: none;
+  flex-shrink: 0;
 }
 .cart__discount-input--amt {
-  padding-left: 22px;
+  border: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  padding: 6px 10px !important;
+  flex: 1;
+  box-shadow: none !important;
 }
 </style>
