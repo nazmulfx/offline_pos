@@ -365,14 +365,22 @@ async function resumeOpenSession() {
 }
 
 function parseERPNextError(err: any): string {
-
   // Try to get the raw message string
   const raw: string = err?.exc || err?.message || err?.toString() || '';
+
+  // Handle CSRF Token expiration / Invalid Request
+  if (raw.includes('CSRFTokenError') || raw.includes('Invalid Request')) {
+    return 'Your security session has expired. Please refresh the page and try again.';
+  }
 
   // ERPNext ValidationError: extract the message after the last colon in the traceback
   // e.g. "frappe.exceptions.ValidationError: sks is open. Close the POS..."
   const validationMatch = raw.match(/ValidationError:\s*(.+?)(?:\n|$)/);
   if (validationMatch) return validationMatch[1].trim();
+
+  // Any generic Frappe Exception name: extract the message after the last colon in the traceback
+  const exceptionMatch = raw.match(/[a-zA-Z.]+Error:\s*(.+?)(?:\n|$)/);
+  if (exceptionMatch) return exceptionMatch[1].trim();
 
   // Frappe _server_messages — JSON array of message objects
   try {
@@ -382,6 +390,11 @@ function parseERPNextError(err: any): string {
       return parsed?.message || raw;
     }
   } catch { /* ignore */ }
+
+  // If it's a raw traceback and we couldn't match anything clean, show a friendly message
+  if (raw.includes('Traceback (most recent call last):')) {
+    return 'A server error occurred. Please refresh the page and try again.';
+  }
 
   // Generic fallback
   return raw || 'Failed to open POS. Please check your POS Profile settings.';

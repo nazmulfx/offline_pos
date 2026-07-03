@@ -246,8 +246,22 @@ export const useSyncStore = defineStore('sync', () => {
   }
 
   function extractErrorMessage(err: any): string {
+    const raw: string = err?.exc || err?.message || err?.toString() || '';
+
+    // Handle CSRF Token expiration / Invalid Request
+    if (raw.includes('CSRFTokenError') || raw.includes('Invalid Request')) {
+      return 'Session expired. Please log in again.';
+    }
+
     const messages: string[] = err?.messages || [];
     if (messages.length > 0) return messages.join(' | ');
+
+    if (raw.includes('Traceback (most recent call last):')) {
+      const genericExceptionMatch = raw.match(/[a-zA-Z.]+Error:\s*(.+?)(?:\n|$)/);
+      if (genericExceptionMatch) return genericExceptionMatch[1].trim();
+      return 'Server error occurred during sync.';
+    }
+
     return err?.message || 'Unknown error';
   }
 
