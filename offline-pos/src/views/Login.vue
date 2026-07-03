@@ -19,6 +19,9 @@
 
       <!-- Form -->
       <form @submit.prevent="login" class="login-form">
+        <!-- Info Message (like session expired) -->
+        <p v-if="route.query.message && !errorMsg" class="login-form__info-msg">{{ route.query.message }}</p>
+
         <div class="login-form__group">
           <label class="login-form__label">Username / Email</label>
           <input
@@ -228,6 +231,16 @@ async function login() {
   font-size: 13px;
   color: #f87171;
   margin: 0;
+}
+.login-form__info-msg {
+  background: rgba(99,102,241,0.1);
+  border: 1px solid rgba(99,102,241,0.3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #818cf8;
+  margin: 0;
+  text-align: center;
 }
 .login-form__btn {
   width: 100%;

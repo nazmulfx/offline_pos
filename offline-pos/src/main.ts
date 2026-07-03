@@ -6,7 +6,7 @@ import { watch } from 'vue';
 import App from "./App.vue";
 
 import router from './router';
-import Auth from './lib/auth';
+import { auth } from './lib/auth';
 import { initTheme } from './composables/useTheme';
 
 import { useNetworkStore } from './stores/networkStore';
@@ -19,7 +19,6 @@ initTheme();
 // ─── Create App ────────────────────────────────────────────
 const app = createApp(App);
 const pinia = createPinia();
-const auth = reactive(new Auth());
 
 // Plugins
 app.use(pinia);
@@ -45,14 +44,23 @@ watch(
       // the network is actually ready for HTTP requests
       await new Promise(r => setTimeout(r, 1500));
 
+      // Verify online session is active
+      const sessionActive = await auth.checkOnlineSessionActive();
+      if (!sessionActive) {
+        console.log('[App] Back online but server session is not active — redirecting to login.');
+        auth.clearLocalCookies();
+        router.push({
+          name: 'Login',
+          query: {
+            route: router.currentRoute.value.path,
+            message: 'Session expired. Please log in again to sync your offline data.'
+          }
+        });
+        return;
+      }
+
       // Re-read cookie to get fresh auth state
-      auth.cookie = Object.fromEntries(
-        document.cookie.split('; ').filter(Boolean).map((part) => {
-          const [k, ...v] = part.split('=');
-          return [k, decodeURIComponent(v.join('='))];
-        })
-      );
-      auth.isLoggedIn = !!auth.cookie.user_id && auth.cookie.user_id !== 'Guest';
+      auth.refresh();
 
       if (!auth.isLoggedIn) {
         console.log('[App] Back online but user is not logged in — skipping sync.');
@@ -92,6 +100,22 @@ openPOSDB().catch((err) => console.error('[App] IndexedDB open failed:', err));
 // ─── Route Guards ──────────────────────────────────────────
 router.beforeEach(async (to, _from, next) => {
   const isLoginPage = to.meta?.isLoginPage === true;
+  const isOffline = !navigator.onLine;
+
+  if (isOffline) {
+    const hasSavedSession = !!localStorage.getItem('pos_session');
+    const lastUser = localStorage.getItem('last_logged_in_user');
+    if (hasSavedSession && lastUser) {
+      // Mock logged in state for offline mode
+      auth.isLoggedIn = true;
+      auth.user = lastUser;
+      
+      if (to.name !== 'POS') {
+        return next({ name: 'POS' });
+      }
+      return next();
+    }
+  }
 
   if (!isLoginPage) {
     // Protected route — must be logged in
