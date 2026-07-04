@@ -230,7 +230,8 @@ async function manualDataRefresh() {
     // 2. Download latest items/customers
     await Promise.all([
       pos.loadItems(true),
-      pos.loadCustomers('')
+      pos.loadCustomers(''),
+      pos.refreshSerialBatchDataFromServer()
     ]);
     
     pos.prefetchAllItems();

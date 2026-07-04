@@ -143,6 +143,55 @@
           />
         </div>
 
+        <!-- Batch Number (Readonly, shown if enabled for item) -->
+        <div v-if="item.has_batch_no" class="item-details__field">
+          <label class="item-details__label">Batch Number</label>
+          <input
+            type="text"
+            :value="item.batch_no || 'None'"
+            disabled
+            class="item-details__input disabled"
+          />
+        </div>
+
+        <!-- Serial Numbers (Readonly, shown if enabled for item) -->
+        <div v-if="item.has_serial_no" class="item-details__field item-details__field--full">
+          <label class="item-details__label">Serial Numbers</label>
+          <textarea
+            :value="item.serial_no || 'None'"
+            disabled
+            rows="3"
+            class="item-details__input disabled"
+            style="resize: none; font-family: monospace; font-size: 12px; line-height: 1.4; background: var(--pos-bg);"
+          ></textarea>
+        </div>
+
+        <!-- Allocations breakdown (Readonly, shown when multiple allocations exist) -->
+        <div v-if="item.allocations && item.allocations.length > 0" class="item-details__field item-details__field--full">
+          <label class="item-details__label">Allocated Batches & Serials</label>
+          <div class="item-details__allocations-list">
+            <div v-for="(alloc, idx) in item.allocations" :key="idx" class="item-details__alloc-card">
+              <div class="item-details__alloc-header">
+                <span class="item-details__alloc-batch" v-if="alloc.batch_no">
+                  <svg class="item-details__alloc-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-right: 4px; display: inline-block; vertical-align: middle;">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                  </svg>
+                  {{ alloc.batch_no }}
+                </span>
+                <span class="item-details__alloc-batch-placeholder" v-else>Serial Allocation</span>
+                <span class="item-details__alloc-qty">Qty: {{ alloc.qty }}</span>
+              </div>
+              <div class="item-details__alloc-serials" v-if="alloc.serial_no">
+                <div class="item-details__alloc-serial-badge" v-for="sn in alloc.serial_no.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)" :key="sn">
+                  {{ sn }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+
+
         <!-- Price List Rate -->
         <div class="item-details__field">
           <label class="item-details__label">Price List Rate</label>
@@ -458,5 +507,60 @@ function onNumpadUpdate(mode: string, value: string) {
 
 .item-details__numpad {
   margin-top: 10px;
+}
+
+.item-details__allocations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.item-details__alloc-card {
+  background: var(--pos-bg);
+  border: 1px solid var(--pos-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.item-details__alloc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+.item-details__alloc-batch {
+  color: var(--pos-accent);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.item-details__alloc-batch-placeholder {
+  color: var(--pos-text-muted);
+}
+.item-details__alloc-qty {
+  color: var(--pos-text);
+  background: var(--pos-border);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.item-details__alloc-serials {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-top: 1px dashed var(--pos-border);
+  padding-top: 8px;
+}
+.item-details__alloc-serial-badge {
+  background: var(--pos-accent-light, rgba(99,102,241,0.06));
+  color: var(--pos-accent);
+  border: 1px solid var(--pos-accent);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: monospace;
 }
 </style>

@@ -81,6 +81,9 @@ app_license = "mit"
 # 	"methods": "offline_pos.utils.jinja_methods",
 # 	"filters": "offline_pos.utils.jinja_filters"
 # }
+jinja = {
+	"methods": "offline_pos.offline_pos.hooks_methods.utils.get_customer_outstanding"
+}
 
 # Installation
 # ------------

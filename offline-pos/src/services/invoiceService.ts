@@ -112,24 +112,59 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     total_taxes_and_charges: payload.totalTaxes || 0,
     paid_amount: payments.reduce((acc, p) => acc + p.amount, 0),
     ...(hasProfileTaxes ? { taxes_and_charges: session.taxes_and_charges } : {}),
-    items: cartItems.map((item) => ({
-      item_code: item.item_code,
-      item_name: item.item_name,
-      qty: item.qty,
-      rate: item.rate,
-      uom: item.uom,
-      warehouse: item.warehouse || session.warehouse,
-      discount_percentage: item.discount_percentage || 0,
-      discount_amount: (item.price_list_rate || item.rate) - item.rate,
-      ...(!hasProfileTaxes ? {
-        item_tax_template: item.item_tax_template || null,
-        item_tax_rate: typeof item.item_tax_rate === 'object' ? JSON.stringify(item.item_tax_rate) : (item.item_tax_rate || '{}')
-      } : {}),
-      ...(item.batch_no ? { batch_no: item.batch_no } : {}),
-      ...(item.serial_no ? { serial_no: item.serial_no } : {}),
-      ...(item.conversion_factor ? { conversion_factor: item.conversion_factor } : {}),
-      ...(item.price_list_rate ? { price_list_rate: item.price_list_rate } : {}),
-    })),
+    items: cartItems.flatMap((item) => {
+      const baseItemFields = {
+        item_code: item.item_code,
+        item_name: item.item_name,
+        uom: item.uom,
+        warehouse: item.warehouse || session.warehouse,
+        discount_percentage: item.discount_percentage || 0,
+        ...(!hasProfileTaxes ? {
+          item_tax_template: item.item_tax_template || null,
+          item_tax_rate: typeof item.item_tax_rate === 'object' ? JSON.stringify(item.item_tax_rate) : (item.item_tax_rate || '{}')
+        } : {}),
+        ...(item.conversion_factor ? { conversion_factor: item.conversion_factor } : {}),
+      };
+
+      if (item.allocations && item.allocations.length > 0) {
+        return item.allocations.map((alloc) => {
+          const qty = alloc.qty;
+          const rate = item.rate;
+          const price_list_rate = item.price_list_rate || rate;
+          const discount_amount = price_list_rate - rate;
+
+          return {
+            ...baseItemFields,
+            qty,
+            rate,
+            price_list_rate,
+            discount_amount,
+            use_serial_batch_fields: (item.has_batch_no || item.has_serial_no) ? 1 : 0,
+            ...(alloc.batch_no ? { batch_no: alloc.batch_no } : {}),
+            ...(alloc.serial_no ? { serial_no: alloc.serial_no } : {}),
+            ...(item.has_batch_no ? { has_batch_no: item.has_batch_no } : {}),
+            ...(item.has_serial_no ? { has_serial_no: item.has_serial_no } : {}),
+          };
+        });
+      } else {
+        const rate = item.rate;
+        const price_list_rate = item.price_list_rate || rate;
+        const discount_amount = price_list_rate - rate;
+
+        return [{
+          ...baseItemFields,
+          qty: item.qty,
+          rate,
+          price_list_rate,
+          discount_amount,
+          use_serial_batch_fields: (item.has_batch_no || item.has_serial_no) ? 1 : 0,
+          ...(item.batch_no ? { batch_no: item.batch_no } : {}),
+          ...(item.serial_no ? { serial_no: item.serial_no } : {}),
+          ...(item.has_batch_no ? { has_batch_no: item.has_batch_no } : {}),
+          ...(item.has_serial_no ? { has_serial_no: item.has_serial_no } : {}),
+        }];
+      }
+    }),
     payments: (() => {
       const allowPartial = session.allow_partial_payment === 1;
       let docPayments = payments
