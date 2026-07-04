@@ -74,6 +74,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { CartItem } from '../../stores/posStore';
+import { formatCurrency } from '../../lib/currency';
 
 const props = defineProps<{
   item: CartItem;
@@ -101,11 +102,7 @@ function increment() { emit('update-qty', props.item.qty + 1); }
 function decrement() { if (props.item.qty > 1) emit('update-qty', props.item.qty - 1); }
 
 function fmt(value: number): string {
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: props.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(value);
+  return formatCurrency(value, props.currency);
 }
 </script>
 

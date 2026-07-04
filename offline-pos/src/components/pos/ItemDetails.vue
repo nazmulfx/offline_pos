@@ -224,6 +224,7 @@
 import { computed, ref, watch } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
 import NumberPad from './NumberPad.vue';
+import { formatCurrency as globalFormatCurrency, getCurrencySymbol } from '../../lib/currency';
 
 const pos = usePOSStore();
 const item = computed(() => pos.selectedCartItem);
@@ -257,8 +258,7 @@ const posItem = computed(() => {
 const hideImages = computed(() => !!pos.session?.hide_images);
 
 const currencySymbol = computed(() => {
-  const curr = pos.session?.currency || 'BDT';
-  return curr === 'BDT' ? '৳' : curr;
+  return getCurrencySymbol(pos.session?.currency);
 });
 
 const availableUoms = computed(() => {
@@ -295,12 +295,7 @@ function onUOMChanged(newUom: string) {
 }
 
 function formatCurrency(value: number | undefined): string {
-  if (value === undefined || value === null) return '—';
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: pos.session?.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(value);
+  return globalFormatCurrency(value, pos.session?.currency);
 }
 
 function onNumpadUpdate(mode: string, value: string) {

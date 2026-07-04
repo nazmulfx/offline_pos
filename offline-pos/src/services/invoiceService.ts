@@ -7,6 +7,7 @@
 import call from '../lib/call';
 import { saveDraftInvoice, addToSyncQueue, cachePOSProfile, getCachedPOSProfile } from '../db/posDB';
 import type { CartItem, Customer, POSSession } from '../stores/posStore';
+import { formatNumber } from '../lib/currency';
 
 interface CreateInvoicePayload {
   session: POSSession;
@@ -346,6 +347,21 @@ export async function getPOSProfileData(posProfile: string): Promise<any> {
           console.warn('[InvoiceService] Failed to cache print format template:', pfErr);
         }
       }
+
+      if (data.custom_offline_print_format) {
+        try {
+          const pfData = await call(
+            'offline_pos.api.get_print_format_template',
+            { print_format: data.custom_offline_print_format, doctype: 'POS Invoice' }
+          );
+          if (pfData) {
+            localStorage.setItem(`print_format_${data.custom_offline_print_format}`, JSON.stringify(pfData));
+            await cachePrintStylesheets(pfData.html);
+          }
+        } catch (pfErr) {
+          console.warn('[InvoiceService] Failed to cache custom offline print format template:', pfErr);
+        }
+      }
     }
     return data;
   } catch (err) {
@@ -428,13 +444,8 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
   const customer = doc.customer || '';
   const items = doc.items || [];
   
-  const currency = doc.currency || 'BDT';
   const formatCurrency = (val: number) => {
-    return new Intl.NumberFormat('en-BD', {
-      style: 'currency',
-      currency: currency,
-      minimumFractionDigits: 0
-    }).format(val);
+    return formatNumber(val);
   };
 
   const subtotal = doc.net_total || 0;

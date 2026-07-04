@@ -312,6 +312,7 @@ onMounted(() => {
         pos.session.hide_images = profileData.hide_images ? 1 : 0;
         pos.session.apply_discount_on = profileData.apply_discount_on || 'Grand Total';
         pos.session.print_format = profileData.print_format || '';
+        pos.session.custom_offline_print_format = profileData.custom_offline_print_format || '';
         pos.session.print_receipt_on_order_complete = profileData.print_receipt_on_order_complete ? 1 : 0;
         pos.session.open_print_dialogue_on_invoice_creation = profileData.open_print_dialogue_on_invoice_creation ? 1 : 0;
         pos.session.allow_partial_payment = profileData.allow_partial_payment;
@@ -411,6 +412,7 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
   setTimeout(() => { successToast.value = null; }, 5000);
 
   const printFormat = pos.session?.print_format || '';
+  const offlinePrintFormat = pos.session?.custom_offline_print_format || printFormat;
   const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
   const openDialogue = pos.session?.open_print_dialogue_on_invoice_creation === 1;
 
@@ -452,8 +454,8 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         printUrlViaIframe(fallbackUrl);
       }
     } else if (doc) {
-      const cachedPF = localStorage.getItem(`print_format_${printFormat}`);
-      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: printFormat };
+      const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
       printInvoiceOffline(doc, pfData, null, true);
     }
   } else if (openDialogue) {
@@ -528,8 +530,8 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         }
       }
     } else if (doc) {
-      const cachedPF = localStorage.getItem(`print_format_${printFormat}`);
-      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: printFormat };
+      const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
       printInvoiceOffline(doc, pfData, preOpenedWindow, false);
     }
   } else if (preOpenedWindow) {

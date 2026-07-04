@@ -168,6 +168,7 @@ import { ref, computed } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
 import CustomerSelector from './CustomerSelector.vue';
 import CartItem from './CartItem.vue';
+import { formatCurrency, getCurrencySymbol } from '../../lib/currency';
 
 const pos = usePOSStore();
 const emit = defineEmits<{ (e: 'checkout'): void }>();
@@ -175,8 +176,7 @@ const emit = defineEmits<{ (e: 'checkout'): void }>();
 const showClearConfirm = ref(false);
 
 const currencySymbol = computed(() => {
-  const curr = pos.session?.currency || 'BDT';
-  return curr === 'BDT' ? '৳' : curr;
+  return getCurrencySymbol(pos.session?.currency);
 });
 
 const canCheckout = computed(
@@ -184,11 +184,7 @@ const canCheckout = computed(
 );
 
 function fmt(v: number) {
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: pos.session?.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(v);
+  return formatCurrency(v, pos.session?.currency);
 }
 
 function triggerClearCart() {

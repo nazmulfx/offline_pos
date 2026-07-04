@@ -47,6 +47,12 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
 @frappe.whitelist()
 def get_print_format_template(print_format, doctype="POS Invoice"):
 	try:
+		# Fetch default company/system currency
+		company = frappe.db.get_default("company") or frappe.db.get_single_value("Global Defaults", "default_company")
+		currency = frappe.db.get_value("Company", company, "default_currency") if company else None
+		if not currency:
+			currency = frappe.db.get_single_value("Global Defaults", "default_currency") or "NGN"
+
 		doc = frappe.new_doc(doctype)
 		doc.name = "___INV_NAME___"
 		doc.company = "___COMPANY___"
@@ -54,10 +60,11 @@ def get_print_format_template(print_format, doctype="POS Invoice"):
 		doc.posting_date = "1999-09-09"
 		doc.posting_time = "09:09:09"
 		doc.net_total = 999333.33
+		doc.total = 999333.33
 		doc.grand_total = 999555.55
 		doc.paid_amount = 999666.66
 		doc.discount_amount = 999444.44
-		doc.currency = "BDT"
+		doc.currency = currency
 		
 		doc.append("items", {
 			"item_code": "___ITEM_CODE___",
