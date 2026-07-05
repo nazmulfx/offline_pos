@@ -68,6 +68,15 @@
           </select>
         </div>
 
+        <div v-if="posProfile && balanceDetails.length === 0 && !isLoading" class="pos-opening__error" style="margin-bottom: 15px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="flex-shrink:0">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>This POS Profile has no payment methods configured. Please configure at least one Mode of Payment in the POS Profile in ERPNext first.</span>
+        </div>
+
         <!-- Opening Balance table -->
         <div v-if="balanceDetails.length > 0" class="pos-opening__balance">
           <label class="pos-opening__label">Opening Balance</label>
@@ -125,7 +134,7 @@
 
         <button
           class="pos-opening__btn pos-opening__btn--primary"
-          :disabled="!company || !posProfile || isSubmitting || isSessionOpenError"
+          :disabled="!company || !posProfile || isSubmitting || isSessionOpenError || balanceDetails.length === 0"
           @click="createOpeningEntry"
         >
           <span v-if="isSubmitting" class="spinner-sm"></span>
@@ -181,7 +190,7 @@ const errorMsg = ref('');
 
 // True when error is specifically a duplicate-session validation
 const isSessionOpenError = computed(() =>
-  !!errorMsg.value && /is open/i.test(errorMsg.value)
+  !!errorMsg.value && /is open/i.test(errorMsg.value) && !errorMsg.value.includes('currently open by')
 );
 
 // Form state
@@ -192,6 +201,10 @@ const posProfiles = ref<any[]>([]);
 const balanceDetails = ref<Array<{ mode_of_payment: string; opening_amount: number }>>([]);
 
 onMounted(async () => {
+  if (pos.session) {
+    router.replace({ name: 'POS' });
+    return;
+  }
   await loadCompanies();
   await checkExistingSession();
 });
@@ -240,6 +253,37 @@ async function loadPaymentMethods() {
       mode_of_payment: p.mode_of_payment,
       opening_amount: 0,
     }));
+
+    // Check if there is an active session on the server for this POS Profile
+    const activeSessions = await call('frappe.client.get_list', {
+      doctype: 'POS Opening Entry',
+      filters: {
+        pos_profile: posProfile.value,
+        docstatus: 1,
+        pos_closing_entry: ['in', ['', null]]
+      },
+      fields: ['name', 'user', 'company', 'pos_profile', 'period_start_date'],
+      limit_page_length: 1
+    });
+
+    if (activeSessions && activeSessions.length > 0) {
+      const activeSession = activeSessions[0];
+      const userCookie = document.cookie.match(/user_id=([^;]+)/);
+      const currentUser = userCookie ? decodeURIComponent(userCookie[1]) : '';
+
+      if (activeSession.user && currentUser && activeSession.user.toLowerCase() === currentUser.toLowerCase()) {
+        // It's the current user's session! Show the "Continue Session" card
+        existingEntry.value = activeSession;
+      } else {
+        // It belongs to a different user! Show a warning and prevent opening
+        errorMsg.value = `${posProfile.value} is currently open by ${activeSession.user}. Please close that POS or cancel the existing POS Opening Entry to create a new one.`;
+      }
+    } else {
+      // Clear any previous duplicate active session errors
+      if (errorMsg.value && (errorMsg.value.includes('is currently open by') || errorMsg.value.includes('is open'))) {
+        errorMsg.value = '';
+      }
+    }
   } catch (err) {
     console.error('[POSOpening] loadPaymentMethods error:', err);
   }
@@ -321,14 +365,22 @@ async function resumeOpenSession() {
 }
 
 function parseERPNextError(err: any): string {
-
   // Try to get the raw message string
   const raw: string = err?.exc || err?.message || err?.toString() || '';
+
+  // Handle CSRF Token expiration / Invalid Request
+  if (raw.includes('CSRFTokenError') || raw.includes('Invalid Request')) {
+    return 'Your security session has expired. Please refresh the page and try again.';
+  }
 
   // ERPNext ValidationError: extract the message after the last colon in the traceback
   // e.g. "frappe.exceptions.ValidationError: sks is open. Close the POS..."
   const validationMatch = raw.match(/ValidationError:\s*(.+?)(?:\n|$)/);
   if (validationMatch) return validationMatch[1].trim();
+
+  // Any generic Frappe Exception name: extract the message after the last colon in the traceback
+  const exceptionMatch = raw.match(/[a-zA-Z.]+Error:\s*(.+?)(?:\n|$)/);
+  if (exceptionMatch) return exceptionMatch[1].trim();
 
   // Frappe _server_messages — JSON array of message objects
   try {
@@ -338,6 +390,11 @@ function parseERPNextError(err: any): string {
       return parsed?.message || raw;
     }
   } catch { /* ignore */ }
+
+  // If it's a raw traceback and we couldn't match anything clean, show a friendly message
+  if (raw.includes('Traceback (most recent call last):')) {
+    return 'A server error occurred. Please refresh the page and try again.';
+  }
 
   // Generic fallback
   return raw || 'Failed to open POS. Please check your POS Profile settings.';

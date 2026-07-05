@@ -119,6 +119,16 @@
                     {{ payment.difference > 0 ? '+' : '' }}{{ fmt(payment.difference) }}
                   </span>
                 </div>
+                <!-- Credit Sale Row -->
+                <div v-if="creditSales > 0" class="closing-modal__payment-row closing-modal__payment-row--credit-sale">
+                  <span class="closing-modal__payment-method">
+                    📝 Credit Sale
+                  </span>
+                  <span class="closing-modal__payment-amount">—</span>
+                  <span class="closing-modal__payment-amount" style="font-weight: 700;">{{ fmt(creditSales) }}</span>
+                  <span class="closing-modal__payment-amount">—</span>
+                  <span class="closing-modal__payment-amount">—</span>
+                </div>
               </div>
             </div>
 
@@ -171,9 +181,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
 import { useNetworkStore } from '../../stores/networkStore';
+import { formatCurrency } from '../../lib/currency';
 import {
   fetchClosingSummary,
   submitClosingEntry,
@@ -196,6 +207,12 @@ const loadError = ref<string | null>(null);
 const submitError = ref<string | null>(null);
 const summary = ref<ClosingSummary | null>(null);
 const closingPayments = ref<ClosingPaymentRow[]>([]);
+
+const creditSales = computed(() => {
+  if (!summary.value) return 0;
+  const totalExpected = summary.value.payments.reduce((acc, p) => acc + p.expected_amount, 0);
+  return Math.max(0, summary.value.grand_total - totalExpected);
+});
 
 // Load summary when modal opens
 watch(() => props.isOpen, (open) => {
@@ -266,11 +283,7 @@ function closeIfIdle() {
 }
 
 function fmt(value: number): string {
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: pos.session?.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(value || 0);
+  return formatCurrency(value || 0, pos.session?.currency);
 }
 
 function formatDate(dateStr: string): string {
@@ -477,6 +490,9 @@ function getLoggedInUser(): string {
   color: var(--pos-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+.closing-modal__payment-row--credit-sale {
+  background: rgba(99, 102, 241, 0.04);
 }
 .closing-modal__payment-method {
   font-weight: 600;

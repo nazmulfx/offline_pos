@@ -46,6 +46,28 @@
           {{ network.isOnline ? 'Online' : 'Offline' }}
         </div>
 
+        <!-- Sync to Server -->
+        <button
+          v-if="network.isOnline"
+          class="pos-topbar__refresh-btn"
+          @click="manualDataRefresh"
+          :disabled="isRefreshingData"
+          title="Sync offline transactions and refresh data from server"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            width="14"
+            height="14"
+            :class="{ rotating: isRefreshingData }"
+          >
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+          </svg>
+          {{ isRefreshingData ? 'Syncing...' : 'Sync to Server' }}
+        </button>
+
         <!-- Theme Toggle -->
         <button class="pos-topbar__theme-btn" @click="toggleTheme" :title="isDark ? 'Switch to Light' : 'Switch to Dark'">
           <!-- Moon icon (dark mode) -->
@@ -164,7 +186,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, inject } from 'vue';
+import { ref, onMounted, onBeforeUnmount, inject, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { usePOSStore } from '../stores/posStore';
 import { useNetworkStore } from '../stores/networkStore';
@@ -177,7 +199,7 @@ import ItemDetails from '../components/pos/ItemDetails.vue';
 import PaymentModal from '../components/pos/PaymentModal.vue';
 import POSClosingModal from '../components/pos/POSClosingModal.vue';
 import OfflineSyncPanel from '../components/pos/OfflineSyncPanel.vue';
-import { getPOSProfileData, printInvoiceOffline } from '../services/invoiceService';
+import { getPOSProfileData, printInvoiceOffline, checkOpeningEntry } from '../services/invoiceService';
 
 const router = useRouter();
 const pos = usePOSStore();
@@ -194,6 +216,36 @@ const isLoggingOut = ref(false);
 const $auth = inject<any>('$auth');
 const currentTime = ref('');
 
+const isRefreshingData = ref(false);
+
+async function manualDataRefresh() {
+  if (isRefreshingData.value || !network.isOnline) return;
+  isRefreshingData.value = true;
+  try {
+    pos.showAlert('Syncing Data', 'Syncing offline transactions and updating local catalog from the server...', 'info');
+    
+    // 1. Upload offline queue
+    await sync.syncAll();
+    
+    // 2. Download latest items/customers
+    await Promise.all([
+      pos.loadItems(true),
+      pos.loadCustomers(''),
+      pos.refreshSerialBatchDataFromServer()
+    ]);
+    
+    pos.prefetchAllItems();
+    pos.prefetchAllCustomers();
+    
+    pos.showAlert('Sync Success', 'POS transactions, catalog, and customer data are fully synchronized!', 'success');
+  } catch (err) {
+    console.error('[POSView] manualDataRefresh error:', err);
+    pos.showAlert('Sync Error', 'Failed to complete synchronization with the server. Please check your internet connection.', 'error');
+  } finally {
+    isRefreshingData.value = false;
+  }
+}
+
 let clockTimer: ReturnType<typeof setInterval>;
 
 // ─── Offline reload guard ─────────────────────────────────────────────────────
@@ -207,11 +259,40 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
   }
 }
 
+async function validateSessionOnline() {
+  if (!network.isOnline || !pos.session) return;
+  try {
+    const userCookie = document.cookie.match(/user_id=([^;]+)/);
+    const user = userCookie ? decodeURIComponent(userCookie[1]) : '';
+    if (!user) return;
+
+    const entries = await checkOpeningEntry(user);
+    const isValid = entries.some((e: any) => e.name === pos.session?.pos_opening);
+
+    if (!isValid) {
+      if (confirm('Your local POS session is not active or has been closed on the server. Click OK to clear the inactive session and start a new one.')) {
+        pos.clearSession();
+        localStorage.removeItem('pos_session');
+        router.replace({ name: 'POSOpening' });
+      }
+    }
+  } catch (err) {
+    console.warn('[POSView] Failed to validate session online:', err);
+  }
+}
+
+watch(() => network.isOnline, (isOnline) => {
+  if (isOnline) {
+    validateSessionOnline();
+  }
+});
+
 onMounted(() => {
   if (!pos.session) {
     router.replace({ name: 'POSOpening' });
     return;
   }
+  validateSessionOnline();
   updateClock();
   clockTimer = setInterval(updateClock, 1000);
   sync.refreshPendingCount();
@@ -231,7 +312,9 @@ onMounted(() => {
         pos.session.hide_images = profileData.hide_images ? 1 : 0;
         pos.session.apply_discount_on = profileData.apply_discount_on || 'Grand Total';
         pos.session.print_format = profileData.print_format || '';
+        pos.session.custom_offline_print_format = profileData.custom_offline_print_format || '';
         pos.session.print_receipt_on_order_complete = profileData.print_receipt_on_order_complete ? 1 : 0;
+        pos.session.open_print_dialogue_on_invoice_creation = profileData.open_print_dialogue_on_invoice_creation ? 1 : 0;
         pos.session.allow_partial_payment = profileData.allow_partial_payment;
         pos.session.allow_rate_change = profileData.allow_rate_change;
         pos.session.allow_discount_change = profileData.allow_discount_change;
@@ -254,12 +337,84 @@ function updateClock() {
   });
 }
 
+function printHtmlViaIframe(html: string) {
+  const oldIframe = document.getElementById('pos-print-iframe');
+  if (oldIframe) {
+    oldIframe.remove();
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.id = 'pos-print-iframe';
+  iframe.style.position = 'fixed';
+  iframe.style.width = '0px';
+  iframe.style.height = '0px';
+  iframe.style.border = 'none';
+  iframe.style.bottom = '0px';
+  iframe.style.right = '0px';
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow?.document;
+  if (doc) {
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const doPrint = () => {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }
+    };
+
+    iframe.contentWindow.addEventListener('afterprint', () => {
+      iframe.remove();
+    });
+
+    setTimeout(doPrint, 500);
+  }
+}
+
+function printUrlViaIframe(url: string) {
+  const oldIframe = document.getElementById('pos-print-iframe');
+  if (oldIframe) {
+    oldIframe.remove();
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.id = 'pos-print-iframe';
+  iframe.style.position = 'fixed';
+  iframe.style.width = '0px';
+  iframe.style.height = '0px';
+  iframe.style.border = 'none';
+  iframe.style.bottom = '0px';
+  iframe.style.right = '0px';
+  iframe.src = url;
+  document.body.appendChild(iframe);
+
+  iframe.onload = () => {
+    const doPrint = () => {
+      if (iframe.contentWindow) {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      }
+    };
+    
+    iframe.contentWindow?.addEventListener('afterprint', () => {
+      iframe.remove();
+    });
+
+    setTimeout(doPrint, 500);
+  };
+}
+
 async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any, preOpenedWindow?: Window | null) {
   successToast.value = { name: invoiceName, offline };
   setTimeout(() => { successToast.value = null; }, 5000);
 
   const printFormat = pos.session?.print_format || '';
+  const offlinePrintFormat = pos.session?.custom_offline_print_format || printFormat;
   const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
+  const openDialogue = pos.session?.open_print_dialogue_on_invoice_creation === 1;
 
   if (autoPrint) {
     if (!offline) {
@@ -278,20 +433,61 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
           let html = await resp.text();
           if (html.includes('print-format')) {
             success = true;
+            const baseTag = `<base href="${window.location.origin}">`;
+            if (html.includes('<head>')) {
+              html = html.replace('<head>', '<head>' + baseTag);
+            } else {
+              html = baseTag + html;
+            }
+            printHtmlViaIframe(html);
+          }
+        }
+
+        if (!success) {
+          const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+          printUrlViaIframe(fallbackUrl);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch and inject printview for iframe print:', err);
+        const doctype = pos.session?.invoice_type || 'POS Invoice';
+        const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+        printUrlViaIframe(fallbackUrl);
+      }
+    } else if (doc) {
+      const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+      printInvoiceOffline(doc, pfData, null, true);
+    }
+  } else if (openDialogue) {
+    if (!offline) {
+      try {
+        const doctype = pos.session?.invoice_type || 'POS Invoice';
+        const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}`;
+        const resp = await fetch(printUrl, {
+          headers: {
+            'X-Frappe-Site-Name': window.location.hostname,
+          },
+          credentials: 'include',
+        });
+        
+        let success = false;
+        if (resp.ok && !resp.redirected && !resp.url.includes('/login')) {
+          let html = await resp.text();
+          if (html.includes('print-format')) {
+            success = true;
             
-            // Inject base href to resolve relative assets and script to auto-print/close
             const baseTag = `<base href="${window.location.origin}">`;
             const closeScript = `
-              <script` + `>
-                window.onload = function() {
-                  setTimeout(function() {
-                    window.print();
-                  }, 500);
+              \x3Cscript>
+                function doPrint() {
+                  window.focus();
+                  window.print();
                 }
                 window.addEventListener('afterprint', function() {
                   window.close();
                 });
-              </script` + `>
+                setTimeout(doPrint, 500);
+              \x3C/script>
             `;
             
             if (html.includes('<head>')) {
@@ -316,7 +512,6 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         }
 
         if (!success) {
-          // Fallback to direct redirect
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
           if (preOpenedWindow) {
             preOpenedWindow.location.href = fallbackUrl;
@@ -335,9 +530,9 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         }
       }
     } else if (doc) {
-      const cachedPF = localStorage.getItem(`print_format_${printFormat}`);
-      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: printFormat };
-      printInvoiceOffline(doc, pfData, preOpenedWindow);
+      const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+      printInvoiceOffline(doc, pfData, preOpenedWindow, false);
     }
   } else if (preOpenedWindow) {
     preOpenedWindow.close();
@@ -542,6 +737,38 @@ async function handleLogout() {
   background: rgba(248,113,113,0.08);
 }
 .pos-topbar__logout-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pos-topbar__refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--pos-border);
+  background: transparent;
+  color: var(--pos-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.pos-topbar__refresh-btn:hover:not(:disabled) {
+  border-color: #6366f1;
+  color: #6366f1;
+  background: rgba(99,102,241,0.08);
+}
+.pos-topbar__refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.rotating {
+  animation: spin 1s linear infinite;
+}
 /* ─── Main Layout ────────────────────────────────────────── */
 .pos-main {
   display: grid;

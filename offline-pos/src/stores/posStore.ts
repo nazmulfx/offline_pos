@@ -5,9 +5,9 @@
 import { defineStore } from 'pinia';
 import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
-import { fetchItems } from '../services/itemService';
+import { fetchItems, fetchItemByBarcode } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
-import { getAllItemGroups, openPOSDB } from '../db/posDB';
+import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData } from '../db/posDB';
 import call from '../lib/call';
 
 export interface POSItem {
@@ -25,6 +25,14 @@ export interface POSItem {
   is_stock_item?: number;
   item_tax_template?: string;
   item_tax_rate?: string;
+  has_batch_no?: number;
+  has_serial_no?: number;
+}
+
+export interface CartItemAllocation {
+  batch_no: string;
+  serial_no: string; // Newline-separated serials
+  qty: number;
 }
 
 export interface CartItem {
@@ -44,7 +52,11 @@ export interface CartItem {
   price_list_rate?: number;
   original_price_list_rate?: number;
   is_stock_item?: number;
+  has_batch_no?: number;
+  has_serial_no?: number;
+  allocations?: CartItemAllocation[];
 }
+
 
 export interface Customer {
   name: string;
@@ -73,7 +85,9 @@ export interface POSSession {
   apply_discount_on?: string;
   hide_images?: number;
   print_format?: string;
+  custom_offline_print_format?: string;
   print_receipt_on_order_complete?: number;
+  open_print_dialogue_on_invoice_creation?: number;
   allow_partial_payment?: number;
   allow_rate_change?: number;
   allow_discount_change?: number;
@@ -132,13 +146,23 @@ export const usePOSStore = defineStore('pos', () => {
     (localStorage.getItem('pos_discount_type') as any) || 'percent'
   );
   const selectedItemIdx = ref<number | null>(null);
+  
+  // ─── Serial & Batch State ─────────────────────────────────────────────────
+  const serialBatchMap = ref<Record<string, {
+    has_serial_no: number;
+    has_batch_no: number;
+    serials: Array<{ serial_no: string; batch_no?: string }>;
+    batches: Array<{ batch_no: string; qty: number; expiry_date?: string }>;
+  }>>({});
+  const pickStrategy = ref<string>('FIFO');
+
   const warehouses = ref<string[]>([]);
 
   // ─── Designed Alert Modal ──────────────────────────────────────────────────
-  const activeAlert = ref<{ title: string; message: string } | null>(null);
+  const activeAlert = ref<{ title: string; message: string; type?: 'success' | 'warning' | 'info' | 'error' } | null>(null);
 
-  function showAlert(title: string, message: string) {
-    activeAlert.value = { title, message };
+  function showAlert(title: string, message: string, type?: 'success' | 'warning' | 'info' | 'error') {
+    activeAlert.value = { title, message, type };
   }
 
   function closeAlert() {
@@ -333,49 +357,233 @@ export const usePOSStore = defineStore('pos', () => {
     selectedCustomer.value = customer;
   }
 
+  // ─── Serial & Batch Selection Helpers ─────────────────────────────────────
+  function getAvailableStockPool(itemCode: string, excludeIdx: number | null = null) {
+    const meta = serialBatchMap.value[itemCode];
+    if (!meta) return { serials: [], batches: [] };
+
+    let serials = [...meta.serials];
+    let batches = meta.batches.map(b => ({ ...b }));
+
+    cartItems.value.forEach((ci, idx) => {
+      if (ci.item_code !== itemCode) return;
+      if (excludeIdx !== null && idx === excludeIdx) return;
+
+      if (ci.serial_no) {
+        const allocatedSerials = ci.serial_no.split(/[\n,]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+        serials = serials.filter(s => !allocatedSerials.includes(s.serial_no.toLowerCase()));
+      }
+
+      if (ci.batch_no) {
+        const allocatedQty = ci.qty * (ci.conversion_factor || 1);
+        const batch = batches.find(b => b.batch_no === ci.batch_no);
+        if (batch) {
+          batch.qty = Math.max(0, batch.qty - allocatedQty);
+        }
+      }
+    });
+
+    return { serials, batches };
+  }
+
+  function sortBatches(batches: any[]) {
+    const strategy = pickStrategy.value || 'FIFO';
+    const list = [...batches];
+    if (strategy === 'Expiry') {
+      list.sort((a, b) => {
+        const dateA = a.expiry_date || '9999-12-31';
+        const dateB = b.expiry_date || '9999-12-31';
+        return dateA.localeCompare(dateB);
+      });
+    } else if (strategy === 'LIFO') {
+      list.reverse();
+    }
+    return list;
+  }
+
+  function autoSelectSerialsAndBatches(itemCode: string, requiredQty: number, excludeIdx: number | null = null, targetBatchNo: string = ''): CartItemAllocation[] {
+    const meta = serialBatchMap.value[itemCode];
+    if (!meta) {
+      return [];
+    }
+
+    const pool = getAvailableStockPool(itemCode, excludeIdx);
+    const allocations: CartItemAllocation[] = [];
+    let remainingQty = requiredQty;
+
+    if (meta.has_batch_no && meta.has_serial_no) {
+      const sortedBatches = sortBatches(pool.batches);
+      for (const b of sortedBatches) {
+        if (targetBatchNo && b.batch_no !== targetBatchNo) continue;
+        if (remainingQty <= 0) break;
+        const batchSerials = pool.serials.filter(s => s.batch_no === b.batch_no);
+        if (batchSerials.length > 0) {
+          const allocQty = Math.min(remainingQty, batchSerials.length);
+          const selectedSerials = batchSerials.slice(0, allocQty).map(s => s.serial_no);
+          allocations.push({
+            batch_no: b.batch_no,
+            serial_no: selectedSerials.join('\n'),
+            qty: allocQty
+          });
+          remainingQty -= allocQty;
+        }
+      }
+    } else if (meta.has_batch_no) {
+      const sortedBatches = sortBatches(pool.batches);
+      for (const b of sortedBatches) {
+        if (targetBatchNo && b.batch_no !== targetBatchNo) continue;
+        if (remainingQty <= 0) break;
+        const allocQty = Math.min(remainingQty, b.qty);
+        if (allocQty > 0) {
+          allocations.push({
+            batch_no: b.batch_no,
+            serial_no: '',
+            qty: allocQty
+          });
+          remainingQty -= allocQty;
+        }
+      }
+      if (remainingQty > 0 && sortedBatches.length > 0) {
+        const fallbackBatch = targetBatchNo || sortedBatches[0].batch_no;
+        if (allocations.length > 0) {
+          allocations[0].qty += remainingQty;
+        } else {
+          allocations.push({
+            batch_no: fallbackBatch,
+            serial_no: '',
+            qty: remainingQty
+          });
+        }
+        remainingQty = 0;
+      }
+    } else if (meta.has_serial_no) {
+      const sortedSerials = pool.serials;
+      const selectedSerials = sortedSerials.slice(0, remainingQty).map(s => s.serial_no);
+      allocations.push({
+        batch_no: '',
+        serial_no: selectedSerials.join('\n'),
+        qty: requiredQty
+      });
+      remainingQty -= selectedSerials.length;
+    }
+
+    return allocations;
+  }
+
+  function handleCartItemQtyChange(item: CartItem, idx: number) {
+    const meta = serialBatchMap.value[item.item_code];
+    if (!meta) return;
+
+    if (meta.has_serial_no || meta.has_batch_no) {
+      const requiredQty = item.qty * (item.conversion_factor || 1);
+      const allocs = autoSelectSerialsAndBatches(item.item_code, requiredQty, idx);
+      
+      item.allocations = allocs;
+      item.batch_no = allocs[0]?.batch_no || '';
+      item.serial_no = allocs.map(a => a.serial_no).filter(Boolean).join('\n');
+
+      const catalogItem = items.value.find((i) => i.item_code === item.item_code);
+      const stockUom = catalogItem?.stock_uom || catalogItem?.uom || 'Nos';
+      if (item.uom !== stockUom) {
+        item.uom = stockUom;
+        item.conversion_factor = 1;
+        if (catalogItem) {
+          item.price_list_rate = catalogItem.price_list_rate || 0;
+          item.original_price_list_rate = catalogItem.price_list_rate || 0;
+          const pct = item.discount_percentage || 0;
+          item.rate = item.price_list_rate * (1 - pct / 100);
+          item.amount = item.qty * item.rate;
+        }
+      }
+    }
+  }
+
   function addToCart(item: POSItem) {
-    if (item.is_stock_item && (item.actual_qty === undefined || item.actual_qty <= 0)) {
+    const meta = serialBatchMap.value[item.item_code];
+    let actualQty = item.actual_qty;
+    if (meta) {
+      if (meta.has_serial_no) {
+        actualQty = meta.serials.length;
+      } else if (meta.has_batch_no) {
+        actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
+      }
+    }
+
+    if (item.is_stock_item && (actualQty === undefined || actualQty <= 0)) {
       showAlert("Out of Stock", "stock is available to this warehouse is zero. can't add to cart");
       return;
     }
 
-    const itemBatchNo = item.batch_no || '';
-    const existing = cartItems.value.find(
-      (ci) => ci.item_code === item.item_code && ci.batch_no === itemBatchNo
+    let uom = item.uom;
+    let rate = item.price_list_rate || 0;
+    let conversionFactor = 1;
+    if (meta && (meta.has_serial_no || meta.has_batch_no)) {
+      uom = item.stock_uom || item.uom || 'Nos';
+      conversionFactor = 1;
+      rate = item.price_list_rate || 0;
+    }
+
+    let selectedBatchNo = '';
+    let selectedSerialNo = '';
+    if (meta && (meta.has_batch_no || meta.has_serial_no)) {
+      const tempAlloc = autoSelectSerialsAndBatches(item.item_code, 1);
+      if (tempAlloc && tempAlloc.length > 0) {
+        selectedBatchNo = tempAlloc[0].batch_no || '';
+        selectedSerialNo = tempAlloc[0].serial_no || '';
+      }
+    }
+
+    const existingIdx = cartItems.value.findIndex(
+      (ci) => ci.item_code === item.item_code && ci.uom === uom && (ci.batch_no || '') === selectedBatchNo
     );
-    if (existing) {
-      if (item.is_stock_item && existing.qty + 1 > item.actual_qty) {
-        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${item.actual_qty} stock available.`);
+
+    if (existingIdx !== -1) {
+      const existing = cartItems.value[existingIdx];
+      if (item.is_stock_item && existing.qty + 1 > actualQty) {
+        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available.`);
         return;
       }
       existing.qty += 1;
       existing.amount = existing.qty * existing.rate;
       
-      const idx = cartItems.value.findIndex(
-        (ci) => ci.item_code === item.item_code && ci.batch_no === itemBatchNo
-      );
-      if (idx !== -1) {
-        selectCartItem(idx);
-      }
+      handleCartItemQtyChange(existing, existingIdx);
+      selectCartItem(existingIdx);
     } else {
-      cartItems.value.push({
+      const newCartItem: CartItem = {
         item_code: item.item_code,
         item_name: item.item_name,
         qty: 1,
-        rate: item.price_list_rate || 0,
-        amount: item.price_list_rate || 0,
-        uom: item.uom,
+        rate: rate,
+        amount: rate,
+        uom: uom,
         discount_percentage: 0,
-        batch_no: itemBatchNo,
+        batch_no: selectedBatchNo,
         warehouse: session.value?.warehouse || '',
         item_tax_template: item.item_tax_template,
         item_tax_rate: item.item_tax_rate,
-        conversion_factor: 1,
-        price_list_rate: item.price_list_rate || 0,
-        original_price_list_rate: item.price_list_rate || 0,
+        conversion_factor: conversionFactor,
+        price_list_rate: rate,
+        original_price_list_rate: rate,
         is_stock_item: item.is_stock_item ? 1 : 0,
-      });
-      selectCartItem(cartItems.value.length - 1);
+        has_batch_no: item.has_batch_no || 0,
+        has_serial_no: item.has_serial_no || 0,
+        allocations: []
+      };
+
+      if (selectedBatchNo || selectedSerialNo) {
+        newCartItem.allocations = [{
+          batch_no: selectedBatchNo,
+          serial_no: selectedSerialNo,
+          qty: 1
+        }];
+        newCartItem.serial_no = selectedSerialNo;
+      }
+      
+      cartItems.value.push(newCartItem);
+      const newIdx = cartItems.value.length - 1;
+      
+      handleCartItemQtyChange(newCartItem, newIdx);
+      selectCartItem(newIdx);
     }
   }
 
@@ -383,9 +591,10 @@ export const usePOSStore = defineStore('pos', () => {
     selectedItemIdx.value = idx;
   }
 
-  function removeFromCart(item_code: string, batch_no: string = '') {
+  function removeFromCart(item_code: string, batch_no: string = '', uom: string = '') {
+    const targetBatch = batch_no || '';
     const indexToRemove = cartItems.value.findIndex(
-      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+      (ci) => ci.item_code === item_code && (uom === '' || ci.uom === uom) && (ci.batch_no || '') === targetBatch
     );
     if (indexToRemove !== -1 && selectedItemIdx.value === indexToRemove) {
       selectedItemIdx.value = null;
@@ -393,36 +602,46 @@ export const usePOSStore = defineStore('pos', () => {
       selectedItemIdx.value -= 1;
     }
     cartItems.value = cartItems.value.filter(
-      (ci) => !(ci.item_code === item_code && ci.batch_no === batch_no)
+      (ci, idx) => idx !== indexToRemove
     );
   }
 
-  function updateQty(item_code: string, qty: number, batch_no: string = '') {
-    const item = cartItems.value.find(
-      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
+  function updateQty(item_code: string, qty: number, batch_no: string = '', uom: string = '') {
+    const targetBatch = batch_no || '';
+    const idx = cartItems.value.findIndex(
+      (ci) => ci.item_code === item_code && (uom === '' || ci.uom === uom) && (ci.batch_no || '') === targetBatch
     );
-    if (!item) return;
+    if (idx === -1) return;
+    const item = cartItems.value[idx];
     if (qty <= 0) {
-      removeFromCart(item_code, batch_no);
+      removeFromCart(item_code, batch_no, uom);
       return;
     }
 
-    const catalogItem = items.value.find((i) => i.item_code === item_code);
-    if (catalogItem && catalogItem.is_stock_item) {
-      if (qty > catalogItem.actual_qty) {
-        showAlert("Stock Limit Exceeded", `Cannot set quantity to ${qty}. Only ${catalogItem.actual_qty} stock available.`);
-        return;
+    const meta = serialBatchMap.value[item_code];
+    let actualQty = item.is_stock_item ? items.value.find((i) => i.item_code === item_code)?.actual_qty || 999999 : 999999;
+    if (meta) {
+      if (meta.has_serial_no) {
+        actualQty = meta.serials.length;
+      } else if (meta.has_batch_no) {
+        actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
       }
+    }
+
+    if (item.is_stock_item && qty * (item.conversion_factor || 1) > actualQty) {
+      showAlert("Stock Limit Exceeded", `Cannot set quantity to ${qty}. Only ${actualQty} stock available.`);
+      return;
     }
 
     item.qty = qty;
     item.amount = qty * item.rate;
+
+    handleCartItemQtyChange(item, idx);
   }
 
+
   function updateRate(item_code: string, rate: number, batch_no: string = '') {
-    const item = cartItems.value.find(
-      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
-    );
+    const item = selectedItemIdx.value !== null ? cartItems.value[selectedItemIdx.value] : cartItems.value.find((ci) => ci.item_code === item_code);
     if (!item) return;
     const sanitizedRate = Math.max(0, rate);
     item.rate = sanitizedRate;
@@ -438,9 +657,7 @@ export const usePOSStore = defineStore('pos', () => {
   }
 
   function updateDiscount(item_code: string, pct: number, batch_no: string = '') {
-    const item = cartItems.value.find(
-      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
-    );
+    const item = selectedItemIdx.value !== null ? cartItems.value[selectedItemIdx.value] : cartItems.value.find((ci) => ci.item_code === item_code);
     if (!item) return;
     const sanitizedPct = Math.max(0, Math.min(100, pct));
     item.discount_percentage = sanitizedPct;
@@ -450,36 +667,32 @@ export const usePOSStore = defineStore('pos', () => {
   }
 
   function updateCartItemWarehouse(item_code: string, warehouse: string, batch_no: string = '') {
-    const item = cartItems.value.find(
-      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
-    );
+    const item = selectedItemIdx.value !== null ? cartItems.value[selectedItemIdx.value] : cartItems.value.find((ci) => ci.item_code === item_code);
     if (item) {
       item.warehouse = warehouse;
     }
   }
 
   function updateCartItemUOM(item_code: string, uom: string, batch_no: string = '') {
-    const item = cartItems.value.find(
-      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
-    );
-    if (item) {
+    const idx = selectedItemIdx.value !== null ? selectedItemIdx.value : cartItems.value.findIndex((ci) => ci.item_code === item_code);
+    if (idx !== -1) {
+      const item = cartItems.value[idx];
       item.uom = uom;
+      handleCartItemQtyChange(item, idx);
     }
   }
 
   function updateCartItemConversionFactor(item_code: string, factor: number, batch_no: string = '') {
-    const item = cartItems.value.find(
-      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
-    );
-    if (item) {
+    const idx = selectedItemIdx.value !== null ? selectedItemIdx.value : cartItems.value.findIndex((ci) => ci.item_code === item_code);
+    if (idx !== -1) {
+      const item = cartItems.value[idx];
       item.conversion_factor = factor;
+      handleCartItemQtyChange(item, idx);
     }
   }
 
   function updateCartItemPrice(item_code: string, priceListRate: number, batch_no: string = '') {
-    const item = cartItems.value.find(
-      (ci) => ci.item_code === item_code && ci.batch_no === batch_no
-    );
+    const item = selectedItemIdx.value !== null ? cartItems.value[selectedItemIdx.value] : cartItems.value.find((ci) => ci.item_code === item_code);
     if (!item) return;
     item.price_list_rate = priceListRate;
     item.original_price_list_rate = priceListRate;
@@ -634,7 +847,50 @@ export const usePOSStore = defineStore('pos', () => {
     }
   });
 
+  // ─── Serial & Batch Loading ────────────────────────────────────────────────
+  async function loadSerialBatchData() {
+    try {
+      const allData = await getAllSerialBatchData();
+      const map: any = {};
+      allData.forEach((item: any) => {
+        map[item.item_code] = {
+          has_serial_no: item.has_serial_no || 0,
+          has_batch_no: item.has_batch_no || 0,
+          serials: item.serials || [],
+          batches: item.batches || [],
+        };
+      });
+      serialBatchMap.value = map;
+      const strategy = localStorage.getItem('pick_serial_and_batch_based_on') || 'FIFO';
+      pickStrategy.value = strategy;
+    } catch (e) {
+      console.error('[POSStore] Failed to load serial & batch data from IndexedDB:', e);
+    }
+  }
+
+  if (session.value) {
+    loadSerialBatchData();
+  }
+
   // ─── Session ─────────────────────────────────────────────────────────────
+
+  async function refreshSerialBatchDataFromServer() {
+    if (!network.isOnline) return;
+    const warehouse = session.value?.warehouse;
+    if (!warehouse) return;
+    try {
+      const sbRes = await call('offline_pos.api.get_serial_batch_data', {
+        warehouse: warehouse
+      });
+      if (sbRes && sbRes.data) {
+        await cacheSerialBatchData(sbRes.data);
+        localStorage.setItem('pick_serial_and_batch_based_on', sbRes.pick_serial_and_batch_based_on || 'FIFO');
+        await loadSerialBatchData();
+      }
+    } catch (err) {
+      console.error('[POSStore] Failed to refresh serial and batch data from server:', err);
+    }
+  }
 
   async function initSession(openingEntry: any, profileData: any) {
     // Fetch invoice_type from POS Settings (Sales Invoice or POS Invoice)
@@ -704,7 +960,9 @@ export const usePOSStore = defineStore('pos', () => {
       apply_discount_on: profileData.apply_discount_on || 'Grand Total',
       hide_images: profileData.hide_images || 0,
       print_format: profileData.print_format || '',
+      custom_offline_print_format: profileData.custom_offline_print_format || '',
       print_receipt_on_order_complete: profileData.print_receipt_on_order_complete || 0,
+      open_print_dialogue_on_invoice_creation: profileData.open_print_dialogue_on_invoice_creation || 0,
       allow_partial_payment: profileData.allow_partial_payment,
       allow_rate_change: profileData.allow_rate_change,
       allow_discount_change: profileData.allow_discount_change,
@@ -735,6 +993,167 @@ export const usePOSStore = defineStore('pos', () => {
 
     // Pre-load data
     await Promise.all([loadItems(true), loadCustomers('')]);
+
+    // Fetch and cache Serial & Batch data if online, then load into memory
+    if (network.isOnline) {
+      await refreshSerialBatchDataFromServer();
+    } else {
+      await loadSerialBatchData();
+    }
+
+    // Start background pre-fetch of all items and customers for offline completeness
+    prefetchAllItems();
+    prefetchAllCustomers();
+  }
+
+  async function prefetchAllItems() {
+    if (!session.value || !network.isOnline) return;
+    console.log('[POSStore] Starting background catalog pre-fetch...');
+    
+    let start = 0;
+    const batchSize = 500;
+    let hasMore = true;
+    
+    while (hasMore) {
+      try {
+        const result = await fetchItems({
+          search: '',
+          group: '',
+          priceList: session.value.price_list,
+          posProfile: session.value.pos_profile,
+          start: start,
+          pageLength: batchSize,
+          isOnline: true,
+        });
+        
+        if (result.length > 0) {
+          const itemCodes = result.map((i: any) => i.item_code);
+          const priceList = session.value.price_list;
+          
+          const [uomDetails, priceDetails] = await Promise.all([
+            call('frappe.client.get_list', {
+              doctype: 'UOM Conversion Detail',
+              parent: 'Item',
+              filters: { parent: ['in', itemCodes] },
+              fields: ['parent', 'uom', 'conversion_factor'],
+              limit_page_length: 5000,
+            }).catch(() => []),
+            call('frappe.client.get_list', {
+              doctype: 'Item Price',
+              filters: {
+                item_code: ['in', itemCodes],
+                price_list: priceList,
+              },
+              fields: ['item_code', 'uom', 'price_list_rate'],
+              limit_page_length: 5000,
+            }).catch(() => [])
+          ]);
+          
+          const uomList = uomDetails || [];
+          const priceListRecords = priceDetails || [];
+          const db = await openPOSDB();
+          const tx = db.transaction('items', 'readwrite');
+          const store = tx.objectStore('items');
+          
+          result.forEach((item: any) => {
+            const uoms = uomList
+              .filter((ud: any) => ud.parent === item.item_code)
+              .map((ud: any) => ({
+                uom: ud.uom,
+                conversion_factor: ud.conversion_factor,
+              }));
+            
+            if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
+              uoms.push({ uom: item.uom, conversion_factor: 1 });
+            }
+            if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
+              uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
+            }
+            item.uoms = uoms;
+            
+            const pricesMap: Record<string, number> = {};
+            if (item.price_list_rate !== undefined) {
+              pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
+            }
+            priceListRecords
+              .filter((pd: any) => pd.item_code === item.item_code)
+              .forEach((pd: any) => {
+                if (pd.uom && pd.price_list_rate !== undefined) {
+                  pricesMap[pd.uom] = pd.price_list_rate;
+                }
+              });
+            item.prices = pricesMap;
+            item.price_list_name = priceList;
+            
+            store.put(item);
+          });
+          
+          await new Promise<void>((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          });
+          
+          console.log(`[POSStore] Pre-fetched and cached items ${start} to ${start + result.length}`);
+        }
+        
+        if (result.length < batchSize) {
+          hasMore = false;
+        } else {
+          start += batchSize;
+          await new Promise(r => setTimeout(r, 250)); // small delay to avoid server hammering
+        }
+      } catch (err) {
+        console.error('[POSStore] Background item pre-fetch batch failed:', err);
+        hasMore = false;
+      }
+    }
+    console.log('[POSStore] Background catalog pre-fetch finished.');
+  }
+
+  async function prefetchAllCustomers() {
+    if (!session.value || !network.isOnline) return;
+    console.log('[POSStore] Starting background customer pre-fetch...');
+    
+    let start = 0;
+    const batchSize = 500;
+    let hasMore = true;
+    const customerGroups = session.value.customer_groups || [];
+    
+    while (hasMore) {
+      try {
+        const filters: Record<string, any> = { disabled: 0 };
+        if (customerGroups.length) {
+          filters.customer_group = ['in', customerGroups];
+        }
+        
+        const result = await call('frappe.client.get_list', {
+          doctype: 'Customer',
+          filters,
+          fields: ['name', 'customer_name', 'mobile_no', 'email_id', 'customer_group', 'loyalty_program'],
+          limit_start: start,
+          limit_page_length: batchSize,
+        });
+        
+        const customersList: any[] = result || [];
+        
+        if (customersList.length > 0) {
+          const { cacheCustomers } = await import('../db/posDB');
+          await cacheCustomers(customersList);
+          console.log(`[POSStore] Pre-fetched and cached customers ${start} to ${start + customersList.length}`);
+        }
+        
+        if (customersList.length < batchSize) {
+          hasMore = false;
+        } else {
+          start += batchSize;
+          await new Promise(r => setTimeout(r, 200));
+        }
+      } catch (err) {
+        console.error('[POSStore] Background customer pre-fetch batch failed:', err);
+        hasMore = false;
+      }
+    }
+    console.log('[POSStore] Background customer pre-fetch finished.');
   }
 
   async function fetchItemDetailsOfflineData(itemCode: string): Promise<{
@@ -824,33 +1243,324 @@ export const usePOSStore = defineStore('pos', () => {
   async function decrementStock(itemsToDecrement: CartItem[]) {
     try {
       const db = await openPOSDB();
-      const tx = db.transaction('items', 'readwrite');
-      const store = tx.objectStore('items');
+
+      // Step 1: Read all cached items in a single readonly transaction first
+      const cachedItemsMap: Record<string, any> = {};
+      const readTx = db.transaction('items', 'readonly');
+      const readStore = readTx.objectStore('items');
+
+      const readPromises = itemsToDecrement.map((cartItem) => {
+        return new Promise<void>((resolve) => {
+          const req = readStore.get(cartItem.item_code);
+          req.onsuccess = () => {
+            if (req.result) {
+              cachedItemsMap[cartItem.item_code] = req.result;
+            }
+            resolve();
+          };
+          req.onerror = () => resolve();
+        });
+      });
+      await Promise.all(readPromises);
+
+      // Step 2: Write updates in a single, synchronous readwrite transaction
+      const writeTx = db.transaction('items', 'readwrite');
+      const writeStore = writeTx.objectStore('items');
 
       for (const cartItem of itemsToDecrement) {
+        // Update reactive state
         const matchedItem = items.value.find((i) => i.item_code === cartItem.item_code);
         if (matchedItem && matchedItem.is_stock_item) {
           matchedItem.actual_qty = Math.max(0, matchedItem.actual_qty - cartItem.qty);
+        }
 
-          const cachedItem = await new Promise<any>((resolve) => {
-            const req = store.get(cartItem.item_code);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => resolve(null);
-          });
-          if (cachedItem) {
-            cachedItem.actual_qty = Math.max(0, (cachedItem.actual_qty || 0) - cartItem.qty);
-            store.put(cachedItem);
-          }
+        // Update local DB cache
+        const cachedItem = cachedItemsMap[cartItem.item_code];
+        if (cachedItem && cachedItem.is_stock_item) {
+          cachedItem.actual_qty = Math.max(0, (cachedItem.actual_qty || 0) - cartItem.qty);
+          writeStore.put(cachedItem);
         }
       }
+
       await new Promise<void>((resolve, reject) => {
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
+        writeTx.oncomplete = () => resolve();
+        writeTx.onerror = () => reject(writeTx.error);
       });
+
+      // Step 3: Decrement local Serials and Batches in memory and IndexedDB
+      const sbTx = db.transaction('serial_batch_data', 'readwrite');
+      const sbStore = sbTx.objectStore('serial_batch_data');
+
+      for (const cartItem of itemsToDecrement) {
+        const meta = serialBatchMap.value[cartItem.item_code];
+        if (!meta) continue;
+
+        // 1. Extract all unique serials to decrement (case-insensitive)
+        const serialsToDecrement = new Set<string>();
+        if (cartItem.serial_no) {
+          cartItem.serial_no.split(/[\n,]+/).map(s => s.trim().toLowerCase()).filter(Boolean).forEach(s => serialsToDecrement.add(s));
+        }
+        if (cartItem.allocations) {
+          cartItem.allocations.forEach(alloc => {
+            if (alloc.serial_no) {
+              alloc.serial_no.split(/[\n,]+/).map(s => s.trim().toLowerCase()).filter(Boolean).forEach(s => serialsToDecrement.add(s));
+            }
+          });
+        }
+
+        // 2. Extract all batches to decrement
+        const batchQtyMap = new Map<string, number>(); // batch_no -> qty
+        if (cartItem.batch_no) {
+          const allocatedQty = cartItem.qty * (cartItem.conversion_factor || 1);
+          batchQtyMap.set(cartItem.batch_no, allocatedQty);
+        }
+        if (cartItem.allocations) {
+          cartItem.allocations.forEach(alloc => {
+            if (alloc.batch_no) {
+              const allocatedQty = alloc.qty * (cartItem.conversion_factor || 1);
+              // Since allocations represent the breakdown, overwrite or add
+              batchQtyMap.set(alloc.batch_no, allocatedQty);
+            }
+          });
+        }
+
+        // 3. Decrement serials
+        if (meta.has_serial_no && serialsToDecrement.size > 0) {
+          meta.serials = meta.serials.filter(s => !serialsToDecrement.has(s.serial_no.toLowerCase()));
+        }
+
+        // 4. Decrement batches
+        if (meta.has_batch_no && batchQtyMap.size > 0) {
+          batchQtyMap.forEach((qtyToDecrement, batchNo) => {
+            const batch = meta.batches.find(b => b.batch_no === batchNo);
+            if (batch) {
+              batch.qty = Math.max(0, batch.qty - qtyToDecrement);
+            }
+          });
+          meta.batches = meta.batches.filter(b => b.qty > 0);
+        }
+
+        sbStore.put({
+          item_code: cartItem.item_code,
+          has_serial_no: meta.has_serial_no,
+          has_batch_no: meta.has_batch_no,
+          serials: meta.serials,
+          batches: meta.batches,
+        });
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        sbTx.oncomplete = () => resolve();
+        sbTx.onerror = () => reject(sbTx.error);
+      });
+
     } catch (e) {
       console.warn('[POSStore] Failed to decrement local stock:', e);
     }
   }
+
+  function addScannedItemToCart(item: POSItem, batchNo: string, serialNo: string) {
+    const meta = serialBatchMap.value[item.item_code];
+    let actualQty = item.actual_qty;
+    if (meta) {
+      if (meta.has_serial_no) {
+        actualQty = meta.serials.length;
+      } else if (meta.has_batch_no) {
+        actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
+      }
+    }
+
+    let uom = item.uom;
+    let rate = item.price_list_rate || 0;
+    let conversionFactor = 1;
+    if (meta && (meta.has_serial_no || meta.has_batch_no)) {
+      uom = item.stock_uom || item.uom || 'Nos';
+      conversionFactor = 1;
+      rate = item.price_list_rate || 0;
+    }
+
+    if (!serialNo && batchNo && meta && meta.has_serial_no) {
+      const currentCartSerials = cartItems.value
+        .filter(ci => ci.item_code === item.item_code)
+        .flatMap(ci => ci.allocations || [])
+        .flatMap(a => a.serial_no.split(/[\n,]+/).map(s => s.trim()).filter(Boolean));
+
+      const availableSerial = meta.serials.find(
+        s => s.batch_no === batchNo && !currentCartSerials.includes(s.serial_no)
+      );
+
+      if (availableSerial) {
+        serialNo = availableSerial.serial_no;
+      } else {
+        showAlert("Out of Serials", `No available serial numbers found in batch ${batchNo}.`);
+        return;
+      }
+    }
+
+    const targetBatch = batchNo || '';
+    const existingIdx = cartItems.value.findIndex(
+      (ci) => ci.item_code === item.item_code && ci.uom === uom && (ci.batch_no || '') === targetBatch
+    );
+
+    if (existingIdx !== -1) {
+      const existing = cartItems.value[existingIdx];
+
+      if (item.is_stock_item && existing.qty + 1 > actualQty) {
+        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available.`);
+        return;
+      }
+
+      if (!existing.allocations) {
+        existing.allocations = [];
+      }
+
+      if (serialNo) {
+        const allSerials = existing.allocations.flatMap(a =>
+          a.serial_no.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+        );
+
+        if (allSerials.includes(serialNo)) {
+          showAlert("Already Added", `Serial number ${serialNo} is already in the cart.`);
+          selectCartItem(existingIdx);
+          return;
+        }
+
+        let alloc = existing.allocations.find(a => a.batch_no === batchNo);
+        if (!alloc) {
+          alloc = { batch_no: batchNo, serial_no: '', qty: 0 };
+          existing.allocations.push(alloc);
+        }
+        const currentSerials = alloc.serial_no
+          ? alloc.serial_no.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+          : [];
+        currentSerials.push(serialNo);
+        alloc.serial_no = currentSerials.join('\n');
+        alloc.qty += 1;
+      } else if (batchNo) {
+        let alloc = existing.allocations.find(a => a.batch_no === batchNo);
+        if (!alloc) {
+          alloc = { batch_no: batchNo, serial_no: '', qty: 0 };
+          existing.allocations.push(alloc);
+        }
+        alloc.qty += 1;
+      }
+
+      existing.qty += 1;
+      existing.amount = existing.qty * existing.rate;
+      
+      existing.batch_no = existing.allocations[0]?.batch_no || '';
+      existing.serial_no = existing.allocations.map(a => a.serial_no).filter(Boolean).join('\n');
+      
+      selectCartItem(existingIdx);
+    } else {
+      const newCartItem: CartItem = {
+        item_code: item.item_code,
+        item_name: item.item_name,
+        qty: 1,
+        rate: rate,
+        amount: rate,
+        uom: uom,
+        discount_percentage: 0,
+        batch_no: batchNo,
+        serial_no: serialNo || '',
+        warehouse: session.value?.warehouse || '',
+        item_tax_template: item.item_tax_template,
+        item_tax_rate: item.item_tax_rate,
+        conversion_factor: conversionFactor,
+        price_list_rate: rate,
+        original_price_list_rate: rate,
+        is_stock_item: item.is_stock_item ? 1 : 0,
+        has_batch_no: item.has_batch_no || 0,
+        has_serial_no: item.has_serial_no || 0,
+        allocations: []
+      };
+
+      if (serialNo) {
+        newCartItem.allocations = [{ batch_no: batchNo, serial_no: serialNo, qty: 1 }];
+      } else if (batchNo) {
+        newCartItem.allocations = [{ batch_no: batchNo, serial_no: '', qty: 1 }];
+      } else if (meta && (meta.has_serial_no || meta.has_batch_no)) {
+        newCartItem.allocations = autoSelectSerialsAndBatches(item.item_code, 1);
+        newCartItem.batch_no = newCartItem.allocations[0]?.batch_no || '';
+        newCartItem.serial_no = newCartItem.allocations.map(a => a.serial_no).filter(Boolean).join('\n');
+      }
+
+      cartItems.value.push(newCartItem);
+      selectCartItem(cartItems.value.length - 1);
+    }
+  }
+
+  async function handleBarcodeScanOrSearch(term: string): Promise<boolean> {
+    const cleanTerm = term.trim();
+    if (!cleanTerm) return false;
+
+    let matchedItemCode = '';
+    let matchedSerialNo = '';
+    let matchedBatchNo = '';
+
+    for (const [itemCode, data] of Object.entries(serialBatchMap.value)) {
+      const foundSerial = data.serials.find(
+        (s) => s.serial_no.toLowerCase() === cleanTerm.toLowerCase()
+      );
+      if (foundSerial) {
+        matchedItemCode = itemCode;
+        matchedSerialNo = foundSerial.serial_no;
+        matchedBatchNo = foundSerial.batch_no || '';
+        break;
+      }
+    }
+
+    if (!matchedItemCode) {
+      for (const [itemCode, data] of Object.entries(serialBatchMap.value)) {
+        const foundBatch = data.batches.find(
+          (b) => b.batch_no.toLowerCase() === cleanTerm.toLowerCase()
+        );
+        if (foundBatch) {
+          matchedItemCode = itemCode;
+          matchedBatchNo = foundBatch.batch_no;
+          break;
+        }
+      }
+    }
+
+    if (matchedItemCode) {
+      let catalogItem = items.value.find((i) => i.item_code === matchedItemCode);
+      if (!catalogItem) {
+        const db = await openPOSDB();
+        catalogItem = await new Promise<any>((resolve) => {
+          const req = db.transaction('items', 'readonly').objectStore('items').get(matchedItemCode);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => resolve(null);
+        });
+      }
+
+      if (!catalogItem) {
+        console.error(`[POSStore] Scanned item ${matchedItemCode} not found in catalog.`);
+        return false;
+      }
+
+      addScannedItemToCart(catalogItem, matchedBatchNo, matchedSerialNo);
+      return true;
+    }
+
+    try {
+      const item = await fetchItemByBarcode(
+        cleanTerm,
+        session.value?.price_list || '',
+        session.value?.warehouse || '',
+        network.isOnline
+      );
+      if (item) {
+        addToCart(item);
+        return true;
+      }
+    } catch (e) {
+      console.warn('[POSStore] Barcode lookup failed:', e);
+    }
+
+    return false;
+  }
+
 
   function clearSession() {
     session.value = null;
@@ -865,16 +1575,18 @@ export const usePOSStore = defineStore('pos', () => {
     session, isSessionLoading, initSession, clearSession,
     // Items
     items, itemGroups, selectedGroup, searchTerm, itemsLoading,
-    loadItems, searchItems, filterByGroup,
+    loadItems, searchItems, filterByGroup, prefetchAllItems,
     // Customers
     customers, customerSearch, customersLoading,
-    loadCustomers, selectCustomer,
+    loadCustomers, selectCustomer, prefetchAllCustomers,
     // Cart
     cartItems, selectedCustomer, cartDiscount, additionalDiscount, discountType,
     selectedItemIdx, warehouses, selectedCartItem,
     addToCart, removeFromCart, updateQty, updateRate, updateDiscount,
     selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor, updateCartItemPrice,
     clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData, decrementStock,
+    // Serial & Batch
+    serialBatchMap, pickStrategy, getAvailableStockPool, autoSelectSerialsAndBatches, handleCartItemQtyChange, handleBarcodeScanOrSearch, refreshSerialBatchDataFromServer,
     // designed alert
     activeAlert, showAlert, closeAlert,
     // Totals

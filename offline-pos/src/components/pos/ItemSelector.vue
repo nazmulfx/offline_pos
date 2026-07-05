@@ -97,18 +97,13 @@ function clearSearch() {
 }
 
 async function onBarcodeEnter() {
-  // If search looks like a barcode (no spaces, short), try barcode lookup first
   const term = localSearch.value.trim();
   if (!term) return;
-  const item = await fetchItemByBarcode(
-    term,
-    pos.session?.price_list || '',
-    pos.session?.warehouse || '',
-    network.isOnline
-  );
-  if (item) {
-    onItemSelect(item);
+  const success = await pos.handleBarcodeScanOrSearch(term);
+  if (success) {
     clearSearch();
+  } else {
+    pos.showAlert("Not Found", `Item, Serial, or Batch "${term}" not found.`);
   }
 }
 

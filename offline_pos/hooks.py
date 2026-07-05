@@ -81,6 +81,9 @@ app_license = "mit"
 # 	"methods": "offline_pos.utils.jinja_methods",
 # 	"filters": "offline_pos.utils.jinja_filters"
 # }
+jinja = {
+	"methods": "offline_pos.offline_pos.hooks_methods.utils.get_customer_outstanding"
+}
 
 # Installation
 # ------------
@@ -252,3 +255,5 @@ override_whitelisted_methods = {
 
 
 website_route_rules = [{'from_route': '/offline-pos/<path:app_path>', 'to_route': 'offline-pos'}]
+
+page_renderer = ["offline_pos.pwa.PWARenderer"]

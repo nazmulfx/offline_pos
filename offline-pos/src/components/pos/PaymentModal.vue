@@ -154,6 +154,7 @@ import { useNetworkStore } from '../../stores/networkStore';
 import { useSyncStore } from '../../stores/syncStore';
 import { submitInvoice } from '../../services/invoiceService';
 import NumberPad from './NumberPad.vue';
+import { formatCurrency } from '../../lib/currency';
 
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{
@@ -249,11 +250,7 @@ function methodIcon(method: string): string {
 }
 
 function fmt(value: number): string {
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: pos.session?.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(value);
+  return formatCurrency(value, pos.session?.currency);
 }
 
 async function submitPayment() {
@@ -263,7 +260,8 @@ async function submitPayment() {
   // Open blank print window synchronously inside click event handler to bypass popup blockers
   let printWindow: Window | null = null;
   const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
-  if (autoPrint) {
+  const openDialogue = pos.session?.open_print_dialogue_on_invoice_creation === 1;
+  if (openDialogue && !autoPrint) {
     printWindow = window.open('about:blank', '_blank');
   }
 

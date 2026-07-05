@@ -4,7 +4,7 @@
  */
 
 const DB_NAME = 'offline_pos_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let _db: IDBDatabase | null = null;
 
@@ -44,6 +44,11 @@ export function openPOSDB(): Promise<IDBDatabase> {
         batchStore.createIndex('item_code', 'item_code', { unique: false });
       }
 
+      // Serial & Batch data store
+      if (!db.objectStoreNames.contains('serial_batch_data')) {
+        db.createObjectStore('serial_batch_data', { keyPath: 'item_code' });
+      }
+
       // Draft Invoices store
       if (!db.objectStoreNames.contains('draft_invoices')) {
         const draftStore = db.createObjectStore('draft_invoices', {
@@ -61,6 +66,7 @@ export function openPOSDB(): Promise<IDBDatabase> {
         });
       }
     };
+
 
     request.onsuccess = (event) => {
       _db = (event.target as IDBOpenDBRequest).result;
@@ -126,26 +132,46 @@ export async function getCachedItems(
 ): Promise<any[]> {
   const db = await openPOSDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction('items', 'readonly');
+    const tx = db.transaction(['items', 'serial_batch_data'], 'readonly');
     const store = tx.objectStore('items');
-    const req = store.getAll();
-    req.onsuccess = () => {
-      let results: any[] = req.result;
-      const searchLower = search.toLowerCase();
+    const sbStore = tx.objectStore('serial_batch_data');
+
+    const sbReq = sbStore.getAll();
+    sbReq.onsuccess = () => {
+      const sbResults = sbReq.result || [];
+      const matchedItemCodesFromSB = new Set<string>();
       if (search) {
-        results = results.filter(
-          (i) =>
-            i.item_name?.toLowerCase().includes(searchLower) ||
-            i.item_code?.toLowerCase().includes(searchLower) ||
-            i.barcode?.toLowerCase().includes(searchLower)
-        );
+        const searchLower = search.toLowerCase();
+        sbResults.forEach((row) => {
+          const matchSerial = row.serials?.some((s: any) => s.serial_no?.toLowerCase().includes(searchLower));
+          const matchBatch = row.batches?.some((b: any) => b.batch_no?.toLowerCase().includes(searchLower));
+          if (matchSerial || matchBatch) {
+            matchedItemCodesFromSB.add(row.item_code);
+          }
+        });
       }
-      if (group && group !== 'All') {
-        results = results.filter((i) => i.item_group === group);
-      }
-      resolve(results);
+
+      const req = store.getAll();
+      req.onsuccess = () => {
+        let results: any[] = req.result;
+        const searchLower = search.toLowerCase();
+        if (search) {
+          results = results.filter(
+            (i) =>
+              i.item_name?.toLowerCase().includes(searchLower) ||
+              i.item_code?.toLowerCase().includes(searchLower) ||
+              i.barcode?.toLowerCase().includes(searchLower) ||
+              matchedItemCodesFromSB.has(i.item_code)
+          );
+        }
+        if (group && group !== 'All') {
+          results = results.filter((i) => i.item_group === group);
+        }
+        resolve(results);
+      };
+      req.onerror = () => reject(req.error);
     };
-    req.onerror = () => reject(req.error);
+    sbReq.onerror = () => reject(sbReq.error);
   });
 }
 
@@ -342,3 +368,34 @@ export async function removeOfflineCustomer(tempName: string): Promise<void> {
     store.delete(tempName) as IDBRequest<undefined>
   );
 }
+
+// ─── Serial & Batch Data ───────────────────────────────────────────────────
+
+export async function cacheSerialBatchData(dataMap: Record<string, any>): Promise<void> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('serial_batch_data', 'readwrite');
+    const store = tx.objectStore('serial_batch_data');
+    Object.entries(dataMap).forEach(([itemCode, itemData]) => {
+      store.put({ item_code: itemCode, ...itemData });
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function getSerialBatchData(itemCode: string): Promise<any | null> {
+  return withStore<any>('serial_batch_data', 'readonly', (store) => store.get(itemCode));
+}
+
+export async function getAllSerialBatchData(): Promise<any[]> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('serial_batch_data', 'readonly');
+    const store = tx.objectStore('serial_batch_data');
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+

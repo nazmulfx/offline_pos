@@ -49,7 +49,8 @@ export async function fetchItems(opts: FetchItemsOptions): Promise<any[]> {
   }
 
   // Offline fallback
-  return getCachedItems(search, group);
+  const cached = await getCachedItems(search, group);
+  return cached.slice(start, start + pageLength);
 }
 
 export async function fetchItemByBarcode(

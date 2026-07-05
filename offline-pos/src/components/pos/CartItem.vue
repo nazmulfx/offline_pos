@@ -16,7 +16,18 @@
 
     <!-- Row 2: Qty controls + Amount -->
     <div class="ci__bottom">
-      <span v-if="item.batch_no" class="ci__badge">{{ item.batch_no }}</span>
+      <template v-if="item.allocations && item.allocations.length > 0">
+        <div class="ci__badge-list" style="display: flex; flex-wrap: wrap; gap: 4px;">
+          <span v-for="alloc in item.allocations.filter(a => a.batch_no)" :key="alloc.batch_no" class="ci__badge">
+            {{ alloc.batch_no }}
+            <span v-if="item.qty > alloc.qty" class="ci__badge-qty" style="font-weight: normal; opacity: 0.85; margin-left: 2px;">(x{{ alloc.qty }})</span>
+          </span>
+        </div>
+      </template>
+      <template v-else-if="item.batch_no">
+        <span class="ci__badge">{{ item.batch_no }}</span>
+      </template>
+
       <span class="ci__uom">{{ item.uom }}</span>
 
       <div class="ci__spacer" />
@@ -35,6 +46,23 @@
       </div>
     </div>
 
+    <!-- Serials list -->
+    <template v-if="item.allocations && item.allocations.length > 0">
+      <div v-for="(alloc, aIdx) in item.allocations.filter(a => a.serial_no)" :key="aIdx" class="ci__serials">
+        <span class="ci__serials-label">
+          <span v-if="alloc.batch_no" style="color: var(--pos-text); font-weight: bold; margin-right: 4px;">[{{ alloc.batch_no }}]</span>
+          Serials:
+        </span>
+        <span class="ci__serials-list">{{ formatAllocationSerials(alloc.serial_no) }}</span>
+      </div>
+    </template>
+    <template v-else-if="item.serial_no">
+      <div class="ci__serials">
+        <span class="ci__serials-label">Serials:</span>
+        <span class="ci__serials-list">{{ formattedSerials }}</span>
+      </div>
+    </template>
+
     <!-- Discount bar (shown when discount > 0) -->
     <div v-if="item.discount_percentage > 0" class="ci__disc">
       <span>{{ parseFloat(item.discount_percentage.toFixed(2)) }}% off</span>
@@ -44,7 +72,9 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { CartItem } from '../../stores/posStore';
+import { formatCurrency } from '../../lib/currency';
 
 const props = defineProps<{
   item: CartItem;
@@ -58,15 +88,21 @@ const emit = defineEmits<{
   (e: 'update-qty', qty: number): void;
 }>();
 
+const formattedSerials = computed(() => {
+  if (!props.item.serial_no) return '';
+  return props.item.serial_no.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).join(', ');
+});
+
+function formatAllocationSerials(serials: string): string {
+  if (!serials) return '';
+  return serials.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).join(', ');
+}
+
 function increment() { emit('update-qty', props.item.qty + 1); }
 function decrement() { if (props.item.qty > 1) emit('update-qty', props.item.qty - 1); }
 
 function fmt(value: number): string {
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: props.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(value);
+  return formatCurrency(value, props.currency);
 }
 </script>
 
@@ -213,5 +249,26 @@ function fmt(value: number): string {
   font-weight: 700;
   color: var(--pos-success, #16a34a);
   align-self: flex-start;
+}
+
+.ci__serials {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 11px;
+  margin-top: 2px;
+  background: var(--pos-bg);
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px dashed var(--pos-border);
+}
+.ci__serials-label {
+  font-weight: 700;
+  color: var(--pos-text-muted);
+}
+.ci__serials-list {
+  color: var(--pos-accent);
+  font-family: monospace;
+  word-break: break-all;
 }
 </style>

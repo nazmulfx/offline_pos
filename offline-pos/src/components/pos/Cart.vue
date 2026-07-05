@@ -15,7 +15,7 @@
           <span class="cart__title">Cart</span>
           <span v-if="pos.cartCount > 0" class="cart__badge">{{ pos.cartCount }}</span>
         </div>
-        <button v-if="pos.cartItems.length > 0" class="cart__trash" @click="confirmClear" title="Clear cart">
+        <button v-if="pos.cartItems.length > 0" class="cart__trash" @click="showClearConfirm = true" title="Clear cart">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
             <polyline points="3 6 5 6 21 6"/>
             <path d="M19 6l-1 14H6L5 6"/>
@@ -38,8 +38,8 @@
         :is-active="pos.selectedItemIdx === idx"
         :currency="pos.session?.currency"
         @select="pos.selectCartItem(idx)"
-        @remove="pos.removeFromCart(item.item_code, item.batch_no)"
-        @update-qty="(qty) => pos.updateQty(item.item_code, qty, item.batch_no)"
+        @remove="pos.removeFromCart(item.item_code, item.batch_no, item.uom)"
+        @update-qty="(qty) => pos.updateQty(item.item_code, qty, item.batch_no, item.uom)"
       />
     </div>
 
@@ -139,6 +139,27 @@
       </button>
     </div>
 
+    <!-- Clear Cart Confirmation Modal -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="showClearConfirm" class="confirm-overlay" @click.self="showClearConfirm = false">
+          <div class="confirm-modal">
+            <div class="confirm-modal__icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="28" height="28">
+                <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/>
+              </svg>
+            </div>
+            <h3 class="confirm-modal__title">Clear Cart</h3>
+            <p class="confirm-modal__message">Are you sure you want to remove all items from your cart?</p>
+            <div class="confirm-modal__actions">
+              <button class="confirm-modal__btn confirm-modal__btn--cancel" @click="showClearConfirm = false">Cancel</button>
+              <button class="confirm-modal__btn confirm-modal__btn--confirm" @click="triggerClearCart">Clear Cart</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
   </div>
 </template>
 
@@ -147,13 +168,15 @@ import { ref, computed } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
 import CustomerSelector from './CustomerSelector.vue';
 import CartItem from './CartItem.vue';
+import { formatCurrency, getCurrencySymbol } from '../../lib/currency';
 
 const pos = usePOSStore();
 const emit = defineEmits<{ (e: 'checkout'): void }>();
 
+const showClearConfirm = ref(false);
+
 const currencySymbol = computed(() => {
-  const curr = pos.session?.currency || 'BDT';
-  return curr === 'BDT' ? '৳' : curr;
+  return getCurrencySymbol(pos.session?.currency);
 });
 
 const canCheckout = computed(
@@ -161,17 +184,12 @@ const canCheckout = computed(
 );
 
 function fmt(v: number) {
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: pos.session?.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(v);
+  return formatCurrency(v, pos.session?.currency);
 }
 
-function confirmClear() {
-  if (confirm('Clear all cart items?')) {
-    pos.clearCart();
-  }
+function triggerClearCart() {
+  pos.clearCart();
+  showClearConfirm.value = false;
 }
 </script>
 
@@ -395,18 +413,128 @@ function confirmClear() {
   border-color: var(--pos-accent);
 }
 .cart__discount-prefix-wrap {
-  position: relative;
   display: flex;
   align-items: center;
+  background: var(--pos-bg);
+  border: 1px solid var(--pos-border);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.cart__discount-prefix-wrap:focus-within {
+  border-color: var(--pos-accent);
 }
 .cart__discount-prefix {
-  position: absolute;
-  left: 10px;
-  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--pos-surface-hover);
+  border-right: 1px solid var(--pos-border);
+  font-size: 11px;
+  font-weight: 700;
   color: var(--pos-text-muted);
-  pointer-events: none;
+  user-select: none;
+  flex-shrink: 0;
 }
 .cart__discount-input--amt {
-  padding-left: 22px;
+  border: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  padding: 6px 10px !important;
+  flex: 1;
+  box-shadow: none !important;
+}
+
+/* ── Clear Cart Confirmation Modal ── */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(8px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.confirm-modal {
+  background: var(--pos-surface, #fff);
+  border: 1px solid var(--pos-border, #e2e8f0);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 360px;
+  padding: 28px 24px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.confirm-modal__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.confirm-modal__title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--pos-text, #1e293b);
+  margin: 0 0 8px;
+}
+
+.confirm-modal__message {
+  font-size: 14px;
+  color: var(--pos-text-muted, #64748b);
+  line-height: 1.5;
+  margin: 0 0 24px;
+}
+
+.confirm-modal__actions {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+
+.confirm-modal__btn {
+  flex: 1;
+  padding: 10px;
+  border-radius: 10px;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.confirm-modal__btn--cancel {
+  background: var(--pos-bg, #f1f5f9);
+  color: var(--pos-text, #475569);
+  border: 1px solid var(--pos-border, #cbd5e1);
+}
+
+.confirm-modal__btn--cancel:hover {
+  background: var(--pos-border, #e2e8f0);
+}
+
+.confirm-modal__btn--confirm {
+  background: #ef4444;
+  color: #fff;
+}
+
+.confirm-modal__btn--confirm:hover {
+  background: #dc2626;
+}
+
+.confirm-modal__btn:active {
+  transform: scale(0.98);
 }
 </style>

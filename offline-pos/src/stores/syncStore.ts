@@ -19,6 +19,8 @@ import {
   removeOfflineCustomer,
 } from '../db/posDB';
 import call from '../lib/call';
+import { auth } from '../lib/auth';
+import router from '../router';
 
 export const useSyncStore = defineStore('sync', () => {
   const pendingCount = ref<number>(0);
@@ -142,9 +144,17 @@ export const useSyncStore = defineStore('sync', () => {
         errors.push('Customer: ' + msg);
         console.error('[SyncStore] Customer sync failed id=' + item.id, err);
         if (isAuthError(err)) {
-          syncError.value = 'Authentication error. Please refresh the page.';
+          syncError.value = 'Session expired. Please log in again to sync.';
           isSyncing.value = false;
           await refreshPendingCount();
+          auth.clearLocalCookies();
+          router.push({
+            name: 'Login',
+            query: {
+              route: router.currentRoute.value.path,
+              message: 'Session expired. Please log in again to sync.'
+            }
+          });
           return;
         }
       }
@@ -174,7 +184,15 @@ export const useSyncStore = defineStore('sync', () => {
         errors.push('Invoice: ' + msg);
         console.error('[SyncStore] Invoice sync failed id=' + item.id, err);
         if (isAuthError(err)) {
-          syncError.value = 'Authentication error. Please refresh the page.';
+          syncError.value = 'Session expired. Please log in again to sync.';
+          auth.clearLocalCookies();
+          router.push({
+            name: 'Login',
+            query: {
+              route: router.currentRoute.value.path,
+              message: 'Session expired. Please log in again to sync.'
+            }
+          });
           break;
         }
         // Continue other invoices even if one fails
@@ -228,8 +246,22 @@ export const useSyncStore = defineStore('sync', () => {
   }
 
   function extractErrorMessage(err: any): string {
+    const raw: string = err?.exc || err?.message || err?.toString() || '';
+
+    // Handle CSRF Token expiration / Invalid Request
+    if (raw.includes('CSRFTokenError') || raw.includes('Invalid Request')) {
+      return 'Session expired. Please log in again.';
+    }
+
     const messages: string[] = err?.messages || [];
     if (messages.length > 0) return messages.join(' | ');
+
+    if (raw.includes('Traceback (most recent call last):')) {
+      const genericExceptionMatch = raw.match(/[a-zA-Z.]+Error:\s*(.+?)(?:\n|$)/);
+      if (genericExceptionMatch) return genericExceptionMatch[1].trim();
+      return 'Server error occurred during sync.';
+    }
+
     return err?.message || 'Unknown error';
   }
 
