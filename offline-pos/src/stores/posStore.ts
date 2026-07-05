@@ -362,7 +362,7 @@ export const usePOSStore = defineStore('pos', () => {
     const meta = serialBatchMap.value[itemCode];
     if (!meta) return { serials: [], batches: [] };
 
-    let serials = [...meta.serials];
+    let serials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
     let batches = meta.batches.map(b => ({ ...b }));
 
     cartItems.value.forEach((ci, idx) => {
@@ -416,17 +416,28 @@ export const usePOSStore = defineStore('pos', () => {
       for (const b of sortedBatches) {
         if (targetBatchNo && b.batch_no !== targetBatchNo) continue;
         if (remainingQty <= 0) break;
-        const batchSerials = pool.serials.filter(s => s.batch_no === b.batch_no);
-        if (batchSerials.length > 0) {
-          const allocQty = Math.min(remainingQty, batchSerials.length);
-          const selectedSerials = batchSerials.slice(0, allocQty).map(s => s.serial_no);
+        const allocQty = Math.min(remainingQty, b.qty);
+        if (allocQty > 0) {
           allocations.push({
             batch_no: b.batch_no,
-            serial_no: selectedSerials.join('\n'),
+            serial_no: '',
             qty: allocQty
           });
           remainingQty -= allocQty;
         }
+      }
+      if (remainingQty > 0 && sortedBatches.length > 0) {
+        const fallbackBatch = targetBatchNo || sortedBatches[0].batch_no;
+        if (allocations.length > 0) {
+          allocations[0].qty += remainingQty;
+        } else {
+          allocations.push({
+            batch_no: fallbackBatch,
+            serial_no: '',
+            qty: remainingQty
+          });
+        }
+        remainingQty = 0;
       }
     } else if (meta.has_batch_no) {
       const sortedBatches = sortBatches(pool.batches);
@@ -457,14 +468,12 @@ export const usePOSStore = defineStore('pos', () => {
         remainingQty = 0;
       }
     } else if (meta.has_serial_no) {
-      const sortedSerials = pool.serials;
-      const selectedSerials = sortedSerials.slice(0, remainingQty).map(s => s.serial_no);
       allocations.push({
         batch_no: '',
-        serial_no: selectedSerials.join('\n'),
+        serial_no: '',
         qty: requiredQty
       });
-      remainingQty -= selectedSerials.length;
+      remainingQty = 0;
     }
 
     return allocations;
@@ -498,12 +507,17 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
-  function addToCart(item: POSItem) {
+  async function addToCart(item: POSItem) {
+    if (network.isOnline && (item.has_serial_no || item.has_batch_no)) {
+      await refreshItemSerialBatchDataFromServer(item.item_code);
+    }
+
     const meta = serialBatchMap.value[item.item_code];
     let actualQty = item.actual_qty;
     if (meta) {
       if (meta.has_serial_no) {
-        actualQty = meta.serials.length;
+        const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
+        actualQty = activeSerials.length;
       } else if (meta.has_batch_no) {
         actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
       }
@@ -606,7 +620,7 @@ export const usePOSStore = defineStore('pos', () => {
     );
   }
 
-  function updateQty(item_code: string, qty: number, batch_no: string = '', uom: string = '') {
+  async function updateQty(item_code: string, qty: number, batch_no: string = '', uom: string = '') {
     const targetBatch = batch_no || '';
     const idx = cartItems.value.findIndex(
       (ci) => ci.item_code === item_code && (uom === '' || ci.uom === uom) && (ci.batch_no || '') === targetBatch
@@ -618,11 +632,16 @@ export const usePOSStore = defineStore('pos', () => {
       return;
     }
 
+    if (network.isOnline && (item.has_serial_no || item.has_batch_no)) {
+      await refreshItemSerialBatchDataFromServer(item_code);
+    }
+
     const meta = serialBatchMap.value[item_code];
     let actualQty = item.is_stock_item ? items.value.find((i) => i.item_code === item_code)?.actual_qty || 999999 : 999999;
     if (meta) {
       if (meta.has_serial_no) {
-        actualQty = meta.serials.length;
+        const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
+        actualQty = activeSerials.length;
       } else if (meta.has_batch_no) {
         actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
       }
@@ -889,6 +908,30 @@ export const usePOSStore = defineStore('pos', () => {
       }
     } catch (err) {
       console.error('[POSStore] Failed to refresh serial and batch data from server:', err);
+    }
+  }
+
+  async function refreshItemSerialBatchDataFromServer(itemCode: string) {
+    if (!network.isOnline) return;
+    const warehouse = session.value?.warehouse;
+    if (!warehouse) return;
+    try {
+      const sbRes = await call('offline_pos.api.get_serial_batch_data', {
+        warehouse: warehouse,
+        item_code: itemCode
+      });
+      if (sbRes && sbRes.data && sbRes.data[itemCode]) {
+        const itemData = sbRes.data[itemCode];
+        serialBatchMap.value[itemCode] = {
+          has_serial_no: itemData.has_serial_no || 0,
+          has_batch_no: itemData.has_batch_no || 0,
+          serials: itemData.serials || [],
+          batches: itemData.batches || [],
+        };
+        await cacheSerialBatchData(sbRes.data);
+      }
+    } catch (err) {
+      console.warn(`[POSStore] Failed to refresh serial/batch data for ${itemCode}:`, err);
     }
   }
 
@@ -1326,7 +1369,11 @@ export const usePOSStore = defineStore('pos', () => {
 
         // 3. Decrement serials
         if (meta.has_serial_no && serialsToDecrement.size > 0) {
-          meta.serials = meta.serials.filter(s => !serialsToDecrement.has(s.serial_no.toLowerCase()));
+          meta.serials.forEach(s => {
+            if (serialsToDecrement.has(s.serial_no.toLowerCase())) {
+              s.status = 'Delivered';
+            }
+          });
         }
 
         // 4. Decrement batches
@@ -1386,7 +1433,7 @@ export const usePOSStore = defineStore('pos', () => {
         .flatMap(a => a.serial_no.split(/[\n,]+/).map(s => s.trim()).filter(Boolean));
 
       const availableSerial = meta.serials.find(
-        s => s.batch_no === batchNo && !currentCartSerials.includes(s.serial_no)
+        s => s.batch_no === batchNo && (s.status || 'Active') === 'Active' && !currentCartSerials.includes(s.serial_no)
       );
 
       if (availableSerial) {
@@ -1405,11 +1452,6 @@ export const usePOSStore = defineStore('pos', () => {
     if (existingIdx !== -1) {
       const existing = cartItems.value[existingIdx];
 
-      if (item.is_stock_item && existing.qty + 1 > actualQty) {
-        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available.`);
-        return;
-      }
-
       if (!existing.allocations) {
         existing.allocations = [];
       }
@@ -1422,6 +1464,40 @@ export const usePOSStore = defineStore('pos', () => {
         if (allSerials.includes(serialNo)) {
           showAlert("Already Added", `Serial number ${serialNo} is already in the cart.`);
           selectCartItem(existingIdx);
+          return;
+        }
+
+        // UX Optimization: Check if there's an empty slot (qty > number of assigned serials)
+        const totalSerialsCount = existing.allocations.reduce((sum, a) => {
+          return sum + (a.serial_no ? a.serial_no.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length : 0);
+        }, 0);
+
+        if (totalSerialsCount < existing.qty) {
+          let alloc = existing.allocations.find(a => a.batch_no === batchNo);
+          if (!alloc) {
+            alloc = existing.allocations[0] || { batch_no: batchNo, serial_no: '', qty: 0 };
+            if (existing.allocations.length === 0) {
+              existing.allocations.push(alloc);
+            }
+          }
+          const currentSerials = alloc.serial_no
+            ? alloc.serial_no.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+            : [];
+          currentSerials.push(serialNo);
+          alloc.serial_no = currentSerials.join('\n');
+          
+          const allocSerialsCount = currentSerials.length;
+          if (alloc.qty < allocSerialsCount) {
+            alloc.qty = allocSerialsCount;
+          }
+          
+          existing.serial_no = existing.allocations.map(a => a.serial_no).filter(Boolean).join('\n');
+          selectCartItem(existingIdx);
+          return;
+        }
+
+        if (item.is_stock_item && existing.qty + 1 > actualQty) {
+          showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available.`);
           return;
         }
 
@@ -1503,9 +1579,28 @@ export const usePOSStore = defineStore('pos', () => {
         (s) => s.serial_no.toLowerCase() === cleanTerm.toLowerCase()
       );
       if (foundSerial) {
-        matchedItemCode = itemCode;
-        matchedSerialNo = foundSerial.serial_no;
-        matchedBatchNo = foundSerial.batch_no || '';
+        if (network.isOnline) {
+          await refreshItemSerialBatchDataFromServer(itemCode);
+          const freshData = serialBatchMap.value[itemCode];
+          const freshSerial = freshData?.serials.find(
+            (s) => s.serial_no.toLowerCase() === cleanTerm.toLowerCase()
+          );
+          if (!freshSerial || (freshSerial.status || 'Active') !== 'Active') {
+            showAlert("Invalid Serial", `Serial number ${cleanTerm} is not active on the server.`);
+            return true;
+          }
+          matchedItemCode = itemCode;
+          matchedSerialNo = freshSerial.serial_no;
+          matchedBatchNo = freshSerial.batch_no || '';
+        } else {
+          if ((foundSerial.status || 'Active') !== 'Active') {
+            showAlert("Invalid Serial", `Serial number ${cleanTerm} is already sold or inactive.`);
+            return true;
+          }
+          matchedItemCode = itemCode;
+          matchedSerialNo = foundSerial.serial_no;
+          matchedBatchNo = foundSerial.batch_no || '';
+        }
         break;
       }
     }

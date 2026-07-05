@@ -21,6 +21,7 @@ import {
 import call from '../lib/call';
 import { auth } from '../lib/auth';
 import router from '../router';
+import { usePOSStore } from './posStore';
 
 export const useSyncStore = defineStore('sync', () => {
   const pendingCount = ref<number>(0);
@@ -217,6 +218,14 @@ export const useSyncStore = defineStore('sync', () => {
 
     const remaining = await getSyncQueueCount();
     console.log(`[SyncStore] Sync done — pending: ${remaining}, errors: ${errors.length}`);
+
+    // Refresh serial/batch data from server after sync finishes
+    const posStore = usePOSStore();
+    try {
+      await posStore.refreshSerialBatchDataFromServer();
+    } catch (e) {
+      console.warn('[SyncStore] Failed to refresh serial/batch data after sync:', e);
+    }
   }
 
   async function syncCustomerItem(item: any): Promise<any> {
