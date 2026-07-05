@@ -92,16 +92,21 @@ def get_print_format_template(print_format, doctype="POS Invoice"):
 			return None
 
 @frappe.whitelist()
-def get_serial_batch_data(warehouse):
+def get_serial_batch_data(warehouse, item_code=None):
 	based_on = frappe.get_single_value("Stock Settings", "pick_serial_and_batch_based_on") or "FIFO"
 	
 	# Fetch all items with serial/batch
-	items = frappe.get_all("Item", filters={"disabled": 0}, or_filters=[{"has_serial_no": 1}, {"has_batch_no": 1}], fields=["name", "has_serial_no", "has_batch_no"])
+	if item_code:
+		items = frappe.get_all("Item", filters={"name": item_code, "disabled": 0}, fields=["name", "has_serial_no", "has_batch_no"])
+	else:
+		items = frappe.get_all("Item", filters={"disabled": 0}, or_filters=[{"has_serial_no": 1}, {"has_batch_no": 1}], fields=["name", "has_serial_no", "has_batch_no"])
 	item_map = {item.name: item for item in items}
 	
 	# Query all Active Serial Nos in this warehouse
 	serial_filters = {"warehouse": warehouse, "status": "Active"}
-	serial_fields = ["name", "item_code", "batch_no", "creation"]
+	if item_code:
+		serial_filters["item_code"] = item_code
+	serial_fields = ["name", "item_code", "batch_no", "creation", "status"]
 	
 	order_by = "creation asc"
 	if based_on == "LIFO":
@@ -114,11 +119,11 @@ def get_serial_batch_data(warehouse):
 	from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import get_auto_batch_nos
 	
 	batches_data = {}
-	for item_code, item in item_map.items():
+	for item_code_key, item in item_map.items():
 		if item.has_batch_no:
 			try:
 				kwargs = frappe._dict({
-					"item_code": item_code,
+					"item_code": item_code_key,
 					"warehouse": warehouse,
 					"based_on": based_on,
 					"qty": 0
@@ -134,7 +139,7 @@ def get_serial_batch_data(warehouse):
 					})
 				if based_on == "Expiry":
 					enriched.sort(key=lambda x: x["expiry_date"] or "9999-12-31")
-				batches_data[item_code] = enriched
+				batches_data[item_code_key] = enriched
 			except Exception:
 				pass
 
@@ -146,16 +151,17 @@ def get_serial_batch_data(warehouse):
 			serials_data[ic] = []
 		serials_data[ic].append({
 			"serial_no": sn.name,
-			"batch_no": sn.batch_no
+			"batch_no": sn.batch_no,
+			"status": sn.status or "Active"
 		})
 		
 	result = {}
-	for item_code, item in item_map.items():
-		result[item_code] = {
+	for item_code_key, item in item_map.items():
+		result[item_code_key] = {
 			"has_serial_no": item.has_serial_no,
 			"has_batch_no": item.has_batch_no,
-			"serials": serials_data.get(item_code, []),
-			"batches": batches_data.get(item_code, [])
+			"serials": serials_data.get(item_code_key, []),
+			"batches": batches_data.get(item_code_key, [])
 		}
 		
 	return {
