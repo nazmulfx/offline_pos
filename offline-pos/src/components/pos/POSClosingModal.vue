@@ -184,6 +184,7 @@
 import { ref, watch, computed } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
 import { useNetworkStore } from '../../stores/networkStore';
+import { formatCurrency } from '../../lib/currency';
 import {
   fetchClosingSummary,
   submitClosingEntry,
@@ -282,11 +283,7 @@ function closeIfIdle() {
 }
 
 function fmt(value: number): string {
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: pos.session?.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(value || 0);
+  return formatCurrency(value || 0, pos.session?.currency);
 }
 
 function formatDate(dateStr: string): string {

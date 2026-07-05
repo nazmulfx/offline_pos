@@ -243,13 +243,16 @@
 import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from '../../stores/networkStore';
 import { useSyncStore } from '../../stores/syncStore';
+import { usePOSStore } from '../../stores/posStore';
 import { getSyncQueue } from '../../db/posDB';
+import { formatCurrency as globalFormatCurrency } from '../../lib/currency';
 
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const network = useNetworkStore();
 const sync = useSyncStore();
+const pos = usePOSStore();
 
 const isLoading = ref(false);
 const allItems = ref<any[]>([]);
@@ -292,8 +295,7 @@ function invoiceTotal(item: any): number {
 }
 
 function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-BD', { style: 'currency', currency: 'BDT', maximumFractionDigits: 0 })
-    .format(amount);
+  return globalFormatCurrency(amount, pos.session?.currency);
 }
 
 function formatTime(iso: string): string {

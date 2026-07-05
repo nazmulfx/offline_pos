@@ -47,6 +47,7 @@
 import { ref, computed } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
 import type { POSItem } from '../../stores/posStore';
+import { formatCurrency as globalFormatCurrency } from '../../lib/currency';
 
 const props = defineProps<{ item: POSItem; currency?: string }>();
 const emit = defineEmits<{ (e: 'select', item: POSItem): void }>();
@@ -56,12 +57,7 @@ const pos = usePOSStore();
 const hideImages = computed(() => !!pos.session?.hide_images);
 
 function formatCurrency(value: number | undefined): string {
-  if (value === undefined || value === null) return '—';
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: props.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(value);
+  return globalFormatCurrency(value, props.currency);
 }
 </script>
 

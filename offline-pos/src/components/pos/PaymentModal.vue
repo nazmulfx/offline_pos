@@ -154,6 +154,7 @@ import { useNetworkStore } from '../../stores/networkStore';
 import { useSyncStore } from '../../stores/syncStore';
 import { submitInvoice } from '../../services/invoiceService';
 import NumberPad from './NumberPad.vue';
+import { formatCurrency } from '../../lib/currency';
 
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{
@@ -249,11 +250,7 @@ function methodIcon(method: string): string {
 }
 
 function fmt(value: number): string {
-  return new Intl.NumberFormat('en-BD', {
-    style: 'currency',
-    currency: pos.session?.currency || 'BDT',
-    minimumFractionDigits: 0,
-  }).format(value);
+  return formatCurrency(value, pos.session?.currency);
 }
 
 async function submitPayment() {
