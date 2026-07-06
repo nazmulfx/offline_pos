@@ -242,6 +242,40 @@ export async function submitInvoice(payload: CreateInvoicePayload): Promise<{
       const errorText = messages.length > 0
         ? messages.join('\n')
         : err?.message || 'Failed to submit invoice';
+
+      // Check if it's a connection / network error to fallback to offline save
+      const isConnectionError =
+        err instanceof TypeError || // native fetch error like Failed to fetch
+        errorText.includes('Failed to fetch') ||
+        errorText.includes('NetworkError') ||
+        errorText.includes('network') ||
+        errorText.includes('timeout') ||
+        !err.status ||
+        err.status === 0 ||
+        err.status === 408 ||
+        err.status === 502 ||
+        err.status === 503 ||
+        err.status === 504;
+
+      if (isConnectionError) {
+        console.warn('[submitInvoice] Network/Server connection error detected. Falling back to offline save.', err);
+        try {
+          const localId = await saveDraftInvoice(doc);
+          await addToSyncQueue('submit_invoice', { invoice: doc, local_id: localId });
+          return {
+            success: true,
+            localId,
+            offline: true,
+            doc,
+          };
+        } catch (saveErr: any) {
+          return {
+            success: false,
+            error: 'Network connection failed, and failed to save offline: ' + (saveErr?.message || 'Unknown save error'),
+          };
+        }
+      }
+
       return {
         success: false,
         error: errorText,

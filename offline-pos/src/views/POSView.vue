@@ -444,14 +444,27 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         }
 
         if (!success) {
+          if (doc) {
+            console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
+            const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+            const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+            printInvoiceOffline(doc, pfData, null, true);
+          } else {
+            const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+            printUrlViaIframe(fallbackUrl);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch and inject printview for iframe print, falling back to offline printing:', err);
+        if (doc) {
+          const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+          const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+          printInvoiceOffline(doc, pfData, null, true);
+        } else {
+          const doctype = pos.session?.invoice_type || 'POS Invoice';
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
           printUrlViaIframe(fallbackUrl);
         }
-      } catch (err) {
-        console.warn('Failed to fetch and inject printview for iframe print:', err);
-        const doctype = pos.session?.invoice_type || 'POS Invoice';
-        const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
-        printUrlViaIframe(fallbackUrl);
       }
     } else if (doc) {
       const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
@@ -512,21 +525,34 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         }
 
         if (!success) {
+          if (doc) {
+            console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
+            const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+            const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+            printInvoiceOffline(doc, pfData, preOpenedWindow, false);
+          } else {
+            const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+            if (preOpenedWindow) {
+              preOpenedWindow.location.href = fallbackUrl;
+            } else {
+              window.open(fallbackUrl, '_blank');
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch and inject printview, falling back to offline printing:', err);
+        if (doc) {
+          const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+          const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+          printInvoiceOffline(doc, pfData, preOpenedWindow, false);
+        } else {
+          const doctype = pos.session?.invoice_type || 'POS Invoice';
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
           if (preOpenedWindow) {
             preOpenedWindow.location.href = fallbackUrl;
           } else {
             window.open(fallbackUrl, '_blank');
           }
-        }
-      } catch (err) {
-        console.warn('Failed to fetch and inject printview, falling back to direct redirect:', err);
-        const doctype = pos.session?.invoice_type || 'POS Invoice';
-        const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
-        if (preOpenedWindow) {
-          preOpenedWindow.location.href = fallbackUrl;
-        } else {
-          window.open(fallbackUrl, '_blank');
         }
       }
     } else if (doc) {

@@ -242,14 +242,41 @@ export const useSyncStore = defineStore('sync', () => {
       invoice.update_stock = 1;
     }
 
-    const insertedDoc = await call(
-      'frappe.client.insert',
-      { doc: invoice },
-      { skipAuthRedirect: true }
-    );
-    if (!insertedDoc?.name) throw new Error('Insert returned no document');
+    let docToSubmit = null;
+    if (invoice.name) {
+      // Already inserted! Get the latest doc from the server to submit it
+      try {
+        docToSubmit = await call(
+          'frappe.client.get',
+          { doctype: invoice.doctype || 'POS Invoice', name: invoice.name },
+          { skipAuthRedirect: true }
+        );
+      } catch (err: any) {
+        // If not found, it might have been deleted or not actually inserted
+        if (err.status === 404) {
+          docToSubmit = null;
+        } else {
+          throw err;
+        }
+      }
+    }
 
-    await call('frappe.client.submit', { doc: insertedDoc }, { skipAuthRedirect: true });
+    if (!docToSubmit) {
+      const insertedDoc = await call(
+        'frappe.client.insert',
+        { doc: invoice },
+        { skipAuthRedirect: true }
+      );
+      if (!insertedDoc?.name) throw new Error('Insert returned no document');
+      docToSubmit = insertedDoc;
+
+      // Update the queue item's invoice name so that if submit fails next, we don't re-insert it
+      invoice.name = insertedDoc.name;
+      const { updateSyncItemInvoiceName } = await import('../db/posDB');
+      await updateSyncItemInvoiceName(item.id, insertedDoc.name);
+    }
+
+    await call('frappe.client.submit', { doc: docToSubmit }, { skipAuthRedirect: true });
 
     if (local_id) await markInvoiceSynced(local_id);
   }
