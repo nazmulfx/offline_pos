@@ -46,12 +46,12 @@
           {{ network.isOnline ? 'Online' : 'Offline' }}
         </div>
 
-        <!-- Sync to Server -->
+        <!-- Sync with Server -->
         <button
           v-if="network.isOnline"
           class="pos-topbar__refresh-btn"
           @click="manualDataRefresh"
-          :disabled="isRefreshingData"
+          :disabled="isRefreshingData || sync.isSyncing"
           title="Sync offline transactions and refresh data from server"
         >
           <svg
@@ -61,11 +61,11 @@
             stroke-width="2.5"
             width="14"
             height="14"
-            :class="{ rotating: isRefreshingData }"
+            :class="{ rotating: isRefreshingData || sync.isSyncing }"
           >
             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
           </svg>
-          {{ isRefreshingData ? 'Syncing...' : 'Sync to Server' }}
+          {{ (isRefreshingData || sync.isSyncing) ? 'Syncing...' : 'Sync with Server' }}
         </button>
 
         <!-- Theme Toggle -->
@@ -219,7 +219,7 @@ const currentTime = ref('');
 const isRefreshingData = ref(false);
 
 async function manualDataRefresh() {
-  if (isRefreshingData.value || !network.isOnline) return;
+  if (isRefreshingData.value || sync.isSyncing || !network.isOnline) return;
   isRefreshingData.value = true;
   try {
     pos.showAlert('Syncing Data', 'Syncing offline transactions and updating local catalog from the server...', 'info');
