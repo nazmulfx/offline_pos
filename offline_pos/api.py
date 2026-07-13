@@ -170,3 +170,332 @@ def get_serial_batch_data(warehouse, item_code=None):
 	}
 
 
+@frappe.whitelist()
+def get_pos_session_summary(pos_profile=None, user=None, from_date=None, to_date=None, status=None):
+	# Fetch cash modes
+	cash_modes = [d.name for d in frappe.db.get_all("Mode of Payment", filters={"type": "Cash"})]
+	if not cash_modes:
+		cash_modes = ["Cash"]
+
+	# Build filters for POS Opening Entry
+	filters = {}
+	if pos_profile:
+		filters['pos_profile'] = pos_profile
+	if user:
+		filters['user'] = user
+	
+	if status and status != "All":
+		filters['status'] = status
+	else:
+		filters['status'] = ['!=', 'Cancelled']
+
+	if from_date and to_date:
+		filters['period_start_date'] = ['between', [from_date + ' 00:00:00', to_date + ' 23:59:59']]
+	elif from_date:
+		filters['period_start_date'] = ['>=', from_date + ' 00:00:00']
+	elif to_date:
+		filters['period_start_date'] = ['<=', to_date + ' 23:59:59']
+
+	opening_entries = frappe.get_all("POS Opening Entry",
+		filters=filters,
+		fields=["name", "period_start_date", "period_end_date", "status", "pos_profile", "user", "company", "pos_closing_entry"],
+		order_by="period_start_date desc"
+	)
+
+	session_ids = [d.name for d in opening_entries]
+	if not session_ids:
+		return []
+
+	# Find all closed POS Closing Entry details if any
+	closing_names = [d.pos_closing_entry for d in opening_entries if d.pos_closing_entry]
+	closing_entry_details = {}
+	closing_dates = {}
+	if closing_names:
+		closings = frappe.get_all("POS Closing Entry",
+			filters={"name": ["in", closing_names]},
+			fields=["name", "period_end_date"]
+		)
+		closing_dates = {c.name: c.period_end_date for c in closings}
+
+		closing_details = frappe.get_all("POS Closing Entry Detail",
+			filters={"parent": ["in", closing_names]},
+			fields=["parent", "mode_of_payment", "opening_amount", "expected_amount", "closing_amount", "difference"]
+		)
+		for cd in closing_details:
+			closing_entry_details.setdefault(cd.parent, []).append(cd)
+
+	# Query closed invoices
+	closed_invoices = []
+	if closing_names:
+		closed_invoices = frappe.get_all("Sales Invoice",
+			filters={"pos_closing_entry": ["in", closing_names], "docstatus": 1, "is_pos": 1},
+			fields=["name", "grand_total", "outstanding_amount", "is_return", "pos_closing_entry"]
+		)
+
+	# Query open invoices
+	open_invoices = []
+	open_entries = [d for d in opening_entries if not d.pos_closing_entry]
+	if open_entries:
+		min_start_date = min(d.period_start_date for d in open_entries)
+		potential_open_invoices = frappe.get_all("Sales Invoice",
+			filters={
+				"posting_date": [">=", min_start_date.date() if hasattr(min_start_date, 'date') else min_start_date],
+				"docstatus": 1,
+				"is_pos": 1,
+				"is_created_using_pos": 1,
+				"pos_closing_entry": ["in", ["", None]]
+			},
+			fields=["name", "grand_total", "outstanding_amount", "is_return", "pos_profile", "owner", "posting_date", "posting_time"]
+		)
+		
+		from frappe.utils import get_datetime
+		for inv in potential_open_invoices:
+			inv_datetime = get_datetime(f"{inv.posting_date} {str(inv.posting_time)}")
+			for entry in open_entries:
+				if entry.pos_profile == inv.pos_profile and entry.user == inv.owner:
+					entry_start = get_datetime(entry.period_start_date)
+					if entry_start <= inv_datetime:
+						# Dynamically set a temp attribute to map
+						inv.pos_opening_entry = entry.name
+						open_invoices.append(inv)
+						break
+
+	# Now combine and group invoices by session ID
+	invoices_by_session = {}
+	
+	closing_to_opening = {d.pos_closing_entry: d.name for d in opening_entries if d.pos_closing_entry}
+	for inv in closed_invoices:
+		opening_id = closing_to_opening.get(inv.pos_closing_entry)
+		if opening_id:
+			invoices_by_session.setdefault(opening_id, []).append(inv)
+			
+	for inv in open_invoices:
+		invoices_by_session.setdefault(inv.pos_opening_entry, []).append(inv)
+
+	# Combine all invoice names for payment query
+	all_invoices = closed_invoices + open_invoices
+	invoice_names = [inv.name for inv in all_invoices]
+
+	# Query all payments for these invoices
+	payments_by_invoice = {}
+	if invoice_names:
+		payments = frappe.get_all("Sales Invoice Payment",
+			filters={"parent": ["in", invoice_names], "parenttype": "Sales Invoice"},
+			fields=["parent", "mode_of_payment", "amount"]
+		)
+		for p in payments:
+			payments_by_invoice.setdefault(p.parent, []).append(p)
+
+	# Fetch opening details for these sessions
+	opening_details = frappe.get_all("POS Opening Entry Detail",
+		filters={"parent": ["in", session_ids]},
+		fields=["parent", "mode_of_payment", "opening_amount"]
+	)
+	opening_details_by_session = {}
+	for od in opening_details:
+		opening_details_by_session.setdefault(od.parent, []).append(od)
+
+	results = []
+	for entry in opening_entries:
+		session_id = entry.name
+		status = entry.status
+
+		# Opening / Closing Time
+		opening_time = entry.period_start_date
+		closing_time = None
+		if entry.pos_closing_entry:
+			closing_time = closing_dates.get(entry.pos_closing_entry)
+
+		session_invoices = invoices_by_session.get(session_id, [])
+
+		cash_sales = 0
+		bank_card_sales = 0
+		credit_sales = 0
+		total_sales = 0
+		returns = 0
+		net_sales = 0
+		expected_cash = 0
+		actual_cash = None
+		difference = None
+
+		normal_invoices = [inv for inv in session_invoices if not inv.is_return]
+		return_invoices = [inv for inv in session_invoices if inv.is_return]
+
+		# Calculate Total Sales (Gross Sales from normal invoices)
+		total_sales = sum(inv.grand_total for inv in normal_invoices)
+
+		# Calculate Returns (Gross returns as positive number)
+		returns = sum(abs(inv.grand_total) for inv in return_invoices)
+
+		# Net Sales
+		net_sales = total_sales - returns
+
+		# Cash, Bank/Card, and Credit sales from normal invoices
+		for inv in normal_invoices:
+			credit_sales += inv.outstanding_amount
+			inv_payments = payments_by_invoice.get(inv.name, [])
+			for p in inv_payments:
+				if p.mode_of_payment in cash_modes:
+					cash_sales += p.amount
+				else:
+					bank_card_sales += p.amount
+
+		# Cash refunds from return invoices
+		cash_refunds = 0
+		for inv in return_invoices:
+			inv_payments = payments_by_invoice.get(inv.name, [])
+			for p in inv_payments:
+				if p.mode_of_payment in cash_modes:
+					cash_refunds += abs(p.amount)
+
+		# Opening Cash
+		opening_cash = 0
+		session_opening_details = opening_details_by_session.get(session_id, [])
+		for od in session_opening_details:
+			if od.mode_of_payment in cash_modes:
+				opening_cash += od.opening_amount
+
+		# Expected, Actual and Difference Cash
+		if entry.pos_closing_entry:
+			session_closing_details = closing_entry_details.get(entry.pos_closing_entry, [])
+			cash_closing_detail = None
+			for cd in session_closing_details:
+				if cd.mode_of_payment in cash_modes:
+					cash_closing_detail = cd
+					break
+
+			if cash_closing_detail:
+				expected_cash = cash_closing_detail.expected_amount
+				actual_cash = cash_closing_detail.closing_amount
+				difference = cash_closing_detail.difference
+			else:
+				expected_cash = opening_cash + cash_sales - cash_refunds
+				actual_cash = 0
+				difference = actual_cash - expected_cash
+		else:
+			expected_cash = opening_cash + cash_sales - cash_refunds
+			actual_cash = None
+			difference = None
+
+		results.append({
+			"session_id": session_id,
+			"opening_time": opening_time,
+			"closing_time": closing_time,
+			"status": status,
+			"pos_profile": entry.pos_profile,
+			"user": entry.user,
+			"company": entry.company,
+			"cash_sales": cash_sales,
+			"bank_card_sales": bank_card_sales,
+			"credit_sales": credit_sales,
+			"total_sales": total_sales,
+			"returns": returns,
+			"net_sales": net_sales,
+			"expected_cash": expected_cash,
+			"actual_cash": actual_cash,
+			"difference": difference
+		})
+
+	return results
+
+
+@frappe.whitelist()
+def get_pos_session_details(session_id):
+	# Fetch cash modes
+	cash_modes = [d.name for d in frappe.db.get_all("Mode of Payment", filters={"type": "Cash"})]
+	if not cash_modes:
+		cash_modes = ["Cash"]
+
+	opening_entry = frappe.get_doc("POS Opening Entry", session_id)
+	
+	invoices = []
+	if opening_entry.pos_closing_entry:
+		# Closed session: query by pos_closing_entry
+		invoices = frappe.get_all("Sales Invoice",
+			filters={"pos_closing_entry": opening_entry.pos_closing_entry, "docstatus": 1, "is_pos": 1},
+			fields=["name", "customer", "posting_date", "posting_time", "grand_total", "outstanding_amount", "is_return"]
+		)
+	else:
+		# Open session: query by profile, user, datetime
+		from frappe.utils import get_datetime
+		potential_invoices = frappe.get_all("Sales Invoice",
+			filters={
+				"posting_date": [">=", opening_entry.period_start_date.date() if hasattr(opening_entry.period_start_date, 'date') else opening_entry.period_start_date],
+				"docstatus": 1,
+				"is_pos": 1,
+				"is_created_using_pos": 1,
+				"pos_closing_entry": ["in", ["", None]]
+			},
+			fields=["name", "customer", "posting_date", "posting_time", "grand_total", "outstanding_amount", "is_return", "pos_profile", "owner"]
+		)
+		
+		entry_start = get_datetime(opening_entry.period_start_date)
+		for inv in potential_invoices:
+			inv_datetime = get_datetime(f"{inv.posting_date} {str(inv.posting_time)}")
+			if opening_entry.pos_profile == inv.pos_profile and opening_entry.user == inv.owner:
+				if entry_start <= inv_datetime:
+					invoices.append(inv)
+
+	invoice_names = [inv.name for inv in invoices]
+	
+	payments = []
+	if invoice_names:
+		payments = frappe.get_all("Sales Invoice Payment",
+			filters={"parent": ["in", invoice_names], "parenttype": "Sales Invoice"},
+			fields=["parent", "mode_of_payment", "amount"]
+		)
+
+	# Aggregate payments by mode of payment
+	payments_by_mode = {}
+	for p in payments:
+		payments_by_mode[p.mode_of_payment] = payments_by_mode.get(p.mode_of_payment, 0) + p.amount
+
+	# Format payments as list
+	payment_summary = []
+	for mode, amt in payments_by_mode.items():
+		payment_summary.append({
+			"mode_of_payment": mode,
+			"amount": amt,
+			"is_cash": mode in cash_modes
+		})
+
+	# Opening Details
+	opening_balances = []
+	opening_details = frappe.get_all("POS Opening Entry Detail",
+		filters={"parent": session_id},
+		fields=["mode_of_payment", "opening_amount"]
+	)
+	for od in opening_details:
+		opening_balances.append({
+			"mode_of_payment": od.mode_of_payment,
+			"opening_amount": od.opening_amount,
+			"is_cash": od.mode_of_payment in cash_modes
+		})
+
+	# Closing Details if closed
+	closing_balances = []
+	if opening_entry.pos_closing_entry:
+		closing_details = frappe.get_all("POS Closing Entry Detail",
+			filters={"parent": opening_entry.pos_closing_entry},
+			fields=["mode_of_payment", "opening_amount", "expected_amount", "closing_amount", "difference"]
+		)
+		for cd in closing_details:
+			closing_balances.append({
+				"mode_of_payment": cd.mode_of_payment,
+				"opening_amount": cd.opening_amount,
+				"expected_amount": cd.expected_amount,
+				"closing_amount": cd.closing_amount,
+				"difference": cd.difference,
+				"is_cash": cd.mode_of_payment in cash_modes
+			})
+
+	return {
+		"invoices": invoices,
+		"payments": payment_summary,
+		"opening_balances": opening_balances,
+		"closing_balances": closing_balances,
+		"pos_closing_entry": opening_entry.pos_closing_entry
+	}
+
+
+
