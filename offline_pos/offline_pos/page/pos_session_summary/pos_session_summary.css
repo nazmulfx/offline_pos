@@ -1,23 +1,40 @@
-/* POS Session Summary Report styling */
-
 .pos-session-summary-container {
-	padding: 15px 0;
+	padding: 20px 15px;
 	font-family: inherit;
 }
 
 /* Summary Cards Layout */
 .pos-summary-cards {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-	gap: 20px;
 	margin-bottom: 30px;
 }
 
+.pos-summary-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: nowrap;
+	gap: 15px;
+	margin-bottom: 25px;
+	width: 100%;
+}
+
+.summary-operator {
+	font-size: 28px;
+	font-weight: 700;
+	color: #a0aec0;
+	user-select: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 20px;
+}
+
 .summary-card {
+	flex: 1;
+	min-width: 0;
 	background: #ffffff;
 	border: 1px solid #e2e8f0;
 	border-radius: 12px;
-	padding: 20px;
+	padding: 15px;
 	display: flex;
 	align-items: center;
 	box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
@@ -44,6 +61,12 @@
 .icon-sales { background-color: #f0fff4; color: #38a169; }
 .icon-returns { background-color: #fff5f5; color: #e53e3e; }
 .icon-net { background-color: #faf5ff; color: #805ad5; }
+.icon-cash { background-color: #e6fffa; color: #319795; }
+.icon-bank { background-color: #eef2ff; color: #4f46e5; }
+.icon-credit { background-color: #fffaf0; color: #dd6b20; }
+.icon-expected { background-color: #ebf8ff; color: #2b6cb0; }
+.icon-actual { background-color: #f0fff4; color: #2f855a; }
+.icon-diff { background-color: #f7fafc; color: #4a5568; }
 
 .summary-details {
 	display: flex;
@@ -60,7 +83,7 @@
 }
 
 .summary-value {
-	font-size: 22px;
+	font-size: 15px;
 	font-weight: 700;
 	color: #1a202c;
 }
