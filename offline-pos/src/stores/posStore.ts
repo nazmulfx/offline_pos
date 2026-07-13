@@ -7,7 +7,7 @@ import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
 import { fetchItems, fetchItemByBarcode } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
-import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData } from '../db/posDB';
+import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers } from '../db/posDB';
 import call from '../lib/call';
 
 export interface POSItem {
@@ -355,6 +355,42 @@ export const usePOSStore = defineStore('pos', () => {
 
   function selectCustomer(customer: Customer) {
     selectedCustomer.value = customer;
+  }
+
+  async function setDefaultCustomer(customerName: string) {
+    if (!customerName) return;
+    try {
+      let customerObj = customers.value.find(c => c.name === customerName);
+      
+      if (!customerObj) {
+        const cached = await getCachedCustomers(customerName);
+        customerObj = cached.find(c => c.name === customerName);
+      }
+      
+      if (!customerObj && network.isOnline) {
+        const result = await call('frappe.client.get', {
+          doctype: 'Customer',
+          name: customerName,
+        });
+        if (result) {
+          customerObj = {
+            name: result.name,
+            customer_name: result.customer_name,
+            mobile_no: result.mobile_no || '',
+            email_id: result.email_id || '',
+            customer_group: result.customer_group || '',
+            loyalty_program: result.loyalty_program || '',
+          };
+          await cacheCustomers([customerObj]);
+        }
+      }
+      
+      if (customerObj) {
+        selectedCustomer.value = customerObj;
+      }
+    } catch (err) {
+      console.warn('[POSStore] setDefaultCustomer failed:', err);
+    }
   }
 
   // ─── Serial & Batch Selection Helpers ─────────────────────────────────────
@@ -785,7 +821,14 @@ export const usePOSStore = defineStore('pos', () => {
 
   function clearCart() {
     cartItems.value = [];
-    selectedCustomer.value = null;
+    
+    const defCustName = localStorage.getItem('pos_default_customer_name');
+    if (defCustName) {
+      setDefaultCustomer(defCustName);
+    } else {
+      selectedCustomer.value = null;
+    }
+
     cartDiscount.value = 0;
     additionalDiscount.value = 0;
     selectedItemIdx.value = null;
@@ -1000,16 +1043,34 @@ export const usePOSStore = defineStore('pos', () => {
   }
 
   async function initSession(openingEntry: any, profileData: any) {
-    // Fetch invoice_type from POS Settings (Sales Invoice or POS Invoice)
+    // Fetch invoice_type and custom_default_customer from POS Settings
     let invoiceType: 'POS Invoice' | 'Sales Invoice' = 'POS Invoice';
+    let defaultCustomerName: string | null = null;
     try {
-      const posSettings = await call('frappe.client.get_single_value', {
-        doctype: 'POS Settings',
-        field: 'invoice_type',
-      });
-      if (posSettings === 'Sales Invoice') invoiceType = 'Sales Invoice';
-    } catch {
-      console.warn('[POSStore] Could not fetch POS Settings invoice_type, defaulting to POS Invoice');
+      if (network.isOnline) {
+        const [invType, defCust] = await Promise.all([
+          call('frappe.client.get_single_value', {
+            doctype: 'POS Settings',
+            field: 'invoice_type',
+          }),
+          call('frappe.client.get_single_value', {
+            doctype: 'POS Settings',
+            field: 'custom_default_customer',
+          }),
+        ]);
+        if (invType === 'Sales Invoice') invoiceType = 'Sales Invoice';
+        defaultCustomerName = defCust;
+        if (defaultCustomerName) {
+          localStorage.setItem('pos_default_customer_name', defaultCustomerName);
+        } else {
+          localStorage.removeItem('pos_default_customer_name');
+        }
+      } else {
+        defaultCustomerName = localStorage.getItem('pos_default_customer_name');
+      }
+    } catch (err) {
+      console.warn('[POSStore] Could not fetch POS Settings values:', err);
+      defaultCustomerName = localStorage.getItem('pos_default_customer_name');
     }
 
     let fullOpeningEntry = openingEntry;
@@ -1075,6 +1136,10 @@ export const usePOSStore = defineStore('pos', () => {
       allow_discount_change: profileData.allow_discount_change,
       disable_rounded_total: profileData.disable_rounded_total,
     };
+
+    if (!selectedCustomer.value && defaultCustomerName) {
+      await setDefaultCustomer(defaultCustomerName);
+    }
 
     // Load and cache warehouses list
     try {
@@ -1809,10 +1874,19 @@ export const usePOSStore = defineStore('pos', () => {
 
   function clearSession() {
     session.value = null;
+    localStorage.removeItem('pos_default_customer_name');
     clearCart();
     items.value = [];
     customers.value = [];
     warehouses.value = [];
+  }
+
+  // Load default customer if not set
+  if (!selectedCustomer.value) {
+    const defCustName = localStorage.getItem('pos_default_customer_name');
+    if (defCustName) {
+      setDefaultCustomer(defCustName);
+    }
   }
 
   return {
