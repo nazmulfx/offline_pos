@@ -40,6 +40,15 @@
           <span class="pos-topbar__sync-count">{{ sync.pendingCount }}</span>
         </div>
 
+        <!-- Forced Offline Toggle -->
+        <label class="pos-topbar__forced-offline" title="Force system into offline mode">
+          <span class="pos-topbar__forced-offline-switch">
+            <input type="checkbox" v-model="network.isForcedOffline" />
+            <span class="pos-topbar__forced-offline-slider"></span>
+          </span>
+          <span class="pos-topbar__forced-offline-label">Offline Mode</span>
+        </label>
+
         <!-- Network status -->
         <div class="pos-topbar__network" :class="{ offline: !network.isOnline }">
           <span class="pos-topbar__network-dot"></span>
@@ -48,7 +57,6 @@
 
         <!-- Sync with Server -->
         <button
-          v-if="network.isOnline"
           class="pos-topbar__refresh-btn"
           @click="manualDataRefresh"
           :disabled="isRefreshingData || sync.isSyncing"
@@ -219,15 +227,32 @@ const currentTime = ref('');
 const isRefreshingData = ref(false);
 
 async function manualDataRefresh() {
-  if (isRefreshingData.value || sync.isSyncing || !network.isOnline) return;
+  if (isRefreshingData.value || sync.isSyncing) return;
   isRefreshingData.value = true;
+  
+  // Save original forced offline state
+  const originalForcedOffline = network.isForcedOffline;
+  
   try {
+    pos.showAlert('Syncing Data', 'Verifying connection to the server...', 'info');
+    
+    // 1. Test actual physical connection
+    const physicallyConnected = await network.testPhysicalConnection();
+    if (!physicallyConnected) {
+      pos.showAlert('Sync Error', 'Cannot sync. The ERPNext server is unreachable. Please check your internet connection.', 'error');
+      return;
+    }
+
+    // 2. Temporarily disable forced offline mode to allow online API calls
+    network.isForcedOffline = false;
+    await network.checkConnectivity();
+
     pos.showAlert('Syncing Data', 'Syncing offline transactions and updating local catalog from the server...', 'info');
     
-    // 1. Upload offline queue
-    await sync.syncAll();
+    // 3. Upload offline queue
+    const syncResult = await sync.syncAll();
     
-    // 2. Download latest items/customers
+    // 4. Download latest items/customers
     await Promise.all([
       pos.loadItems(true),
       pos.loadCustomers(''),
@@ -237,11 +262,37 @@ async function manualDataRefresh() {
     pos.prefetchAllItems();
     pos.prefetchAllCustomers();
     
-    pos.showAlert('Sync Success', 'POS transactions, catalog, and customer data are fully synchronized!', 'success');
+    // Construct rich detailed message showing exactly what was synchronized
+    let msg = 'POS catalog and customer data are fully synchronized!';
+    if (syncResult) {
+      const parts: string[] = [];
+      if (syncResult.invoices > 0) {
+        parts.push(`${syncResult.invoices} invoice(s)`);
+      }
+      if (syncResult.customers > 0) {
+        parts.push(`${syncResult.customers} customer(s)`);
+      }
+      if (syncResult.others > 0) {
+        parts.push(`${syncResult.others} other record(s)`);
+      }
+      if (parts.length > 0) {
+        msg = `Successfully synchronized: ${parts.join(', ')}. Local catalog, pricing, and customer details have been fully updated!`;
+      } else {
+        msg = 'No pending offline transactions to sync. Local catalog, pricing, and customer details have been fully updated from the server!';
+      }
+      if (syncResult.errorCount > 0) {
+        msg += ` Note: ${syncResult.errorCount} sync item(s) failed.`;
+      }
+    }
+    
+    pos.showAlert('Sync Success', msg, 'success');
   } catch (err) {
     console.error('[POSView] manualDataRefresh error:', err);
     pos.showAlert('Sync Error', 'Failed to complete synchronization with the server. Please check your internet connection.', 'error');
   } finally {
+    // 5. Restore original forced offline state
+    network.isForcedOffline = originalForcedOffline;
+    await network.checkConnectivity();
     isRefreshingData.value = false;
   }
 }
@@ -682,6 +733,68 @@ async function handleLogout() {
 }
 .pos-topbar__sync-icon { display: flex; }
 .pos-topbar__sync-icon.syncing svg { animation: spin 0.8s linear infinite; }
+.pos-topbar__forced-offline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pos-text-muted);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 10px;
+  border: 1px solid var(--pos-border);
+  border-radius: 20px;
+  background: var(--pos-surface-dim, rgba(255, 255, 255, 0.02));
+  transition: all 0.15s ease;
+}
+.pos-topbar__forced-offline:hover {
+  border-color: var(--pos-text-muted);
+  color: var(--pos-text);
+  background: var(--pos-border);
+}
+.pos-topbar__forced-offline-switch {
+  position: relative;
+  display: inline-block;
+  width: 28px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.pos-topbar__forced-offline-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.pos-topbar__forced-offline-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: var(--pos-border);
+  transition: .2s ease;
+  border-radius: 16px;
+}
+.pos-topbar__forced-offline-slider:before {
+  position: absolute;
+  content: "";
+  height: 12px;
+  width: 12px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #fff;
+  transition: .2s ease;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+.pos-topbar__forced-offline-switch input:checked + .pos-topbar__forced-offline-slider {
+  background-color: #ef4444;
+}
+.pos-topbar__forced-offline-switch input:checked + .pos-topbar__forced-offline-slider:before {
+  transform: translateX(12px);
+}
+.pos-topbar__forced-offline-label {
+  font-size: 12px;
+  font-weight: 600;
+}
 .pos-topbar__network {
   display: flex;
   align-items: center;

@@ -30,12 +30,24 @@ export default async function call(
     headers['X-Frappe-CSRF-Token'] = csrfToken;
   }
 
-  const res = await fetch(`/api/method/${method}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(args || {}),
-    credentials: 'include',
-  });
+  let res;
+  try {
+    res = await fetch(`/api/method/${method}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(args || {}),
+      credentials: 'include',
+    });
+  } catch (fetchError) {
+    try {
+      const { useNetworkStore } = await import('../stores/networkStore');
+      const networkStore = useNetworkStore();
+      networkStore.isOnline = false;
+    } catch {
+      // Pinia might not be initialized yet
+    }
+    throw fetchError;
+  }
 
   if (res.ok) {
     // Update CSRF token from response headers if Frappe sends a fresh one

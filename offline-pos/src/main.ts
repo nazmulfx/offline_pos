@@ -100,7 +100,8 @@ openPOSDB().catch((err) => console.error('[App] IndexedDB open failed:', err));
 // ─── Route Guards ──────────────────────────────────────────
 router.beforeEach(async (to, _from, next) => {
   const isLoginPage = to.meta?.isLoginPage === true;
-  const isOffline = !navigator.onLine;
+  const networkStore = useNetworkStore();
+  const isOffline = !networkStore.isOnline;
 
   if (isOffline) {
     const hasSavedSession = !!localStorage.getItem('pos_session');

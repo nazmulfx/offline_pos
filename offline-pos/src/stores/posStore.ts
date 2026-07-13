@@ -904,10 +904,11 @@ export const usePOSStore = defineStore('pos', () => {
       if (sbRes && sbRes.data) {
         await cacheSerialBatchData(sbRes.data);
         localStorage.setItem('pick_serial_and_batch_based_on', sbRes.pick_serial_and_batch_based_on || 'FIFO');
-        await loadSerialBatchData();
       }
     } catch (err) {
       console.error('[POSStore] Failed to refresh serial and batch data from server:', err);
+    } finally {
+      await loadSerialBatchData();
     }
   }
 
@@ -1014,15 +1015,22 @@ export const usePOSStore = defineStore('pos', () => {
 
     // Load and cache warehouses list
     try {
+      let loaded = false;
       if (network.isOnline) {
-        const whList = await call('frappe.client.get_list', {
-          doctype: 'Warehouse',
-          fields: ['name'],
-          limit_page_length: 500,
-        });
-        warehouses.value = (whList || []).map((w: any) => w.name);
-        localStorage.setItem('pos_warehouses', JSON.stringify(warehouses.value));
-      } else {
+        try {
+          const whList = await call('frappe.client.get_list', {
+            doctype: 'Warehouse',
+            fields: ['name'],
+            limit_page_length: 500,
+          });
+          warehouses.value = (whList || []).map((w: any) => w.name);
+          localStorage.setItem('pos_warehouses', JSON.stringify(warehouses.value));
+          loaded = true;
+        } catch (whErr) {
+          console.warn('[POSStore] Failed to load warehouses online, falling back to local cache:', whErr);
+        }
+      }
+      if (!loaded) {
         const cachedWh = localStorage.getItem('pos_warehouses');
         if (cachedWh) warehouses.value = JSON.parse(cachedWh);
       }
@@ -1224,43 +1232,47 @@ export const usePOSStore = defineStore('pos', () => {
 
       // 2. If online, fetch from ERPNext
       if (network.isOnline) {
-        const itemDoc = await call('frappe.client.get', {
-          doctype: 'Item',
-          name: itemCode,
-        });
-        const uoms = itemDoc?.uoms || [];
+        try {
+          const itemDoc = await call('frappe.client.get', {
+            doctype: 'Item',
+            name: itemCode,
+          });
+          const uoms = itemDoc?.uoms || [];
 
-        const priceRecords = await call('frappe.client.get_list', {
-          doctype: 'Item Price',
-          filters: {
-            item_code: itemCode,
-            price_list: priceList,
-          },
-          fields: ['uom', 'price_list_rate'],
-          limit_page_length: 100,
-        }) || [];
+          const priceRecords = await call('frappe.client.get_list', {
+            doctype: 'Item Price',
+            filters: {
+              item_code: itemCode,
+              price_list: priceList,
+            },
+            fields: ['uom', 'price_list_rate'],
+            limit_page_length: 100,
+          }) || [];
 
-        const pricesMap: Record<string, number> = {};
-        if (cachedItem) {
-          if (cachedItem.price_list_rate !== undefined) {
-            pricesMap[cachedItem.uom || cachedItem.stock_uom] = cachedItem.price_list_rate;
+          const pricesMap: Record<string, number> = {};
+          if (cachedItem) {
+            if (cachedItem.price_list_rate !== undefined) {
+              pricesMap[cachedItem.uom || cachedItem.stock_uom] = cachedItem.price_list_rate;
+            }
           }
-        }
-        priceRecords.forEach((pr: any) => {
-          if (pr.uom && pr.price_list_rate !== undefined) {
-            pricesMap[pr.uom] = pr.price_list_rate;
-          }
-        });
+          priceRecords.forEach((pr: any) => {
+            if (pr.uom && pr.price_list_rate !== undefined) {
+              pricesMap[pr.uom] = pr.price_list_rate;
+            }
+          });
 
-        if (cachedItem) {
-          cachedItem.uoms = uoms;
-          cachedItem.prices = pricesMap;
-          cachedItem.price_list_name = priceList;
-          const writeTx = db.transaction('items', 'readwrite');
-          const writeStore = writeTx.objectStore('items');
-          writeStore.put(cachedItem);
+          if (cachedItem) {
+            cachedItem.uoms = uoms;
+            cachedItem.prices = pricesMap;
+            cachedItem.price_list_name = priceList;
+            const writeTx = db.transaction('items', 'readwrite');
+            const writeStore = writeTx.objectStore('items');
+            writeStore.put(cachedItem);
+          }
+          return { uoms, prices: pricesMap };
+        } catch (onlineErr) {
+          console.warn('[POSStore] Online fetch of item details failed, falling back to local data:', onlineErr);
         }
-        return { uoms, prices: pricesMap };
       }
 
       // 3. Fallback for offline mode if they were not cached
