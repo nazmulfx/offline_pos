@@ -142,6 +142,11 @@ jinja = {
 # 		"on_trash": "method"
 # 	}
 # }
+doc_events = {
+	"Sales Invoice": {
+		"before_validate": "offline_pos.offline_pos.hooks_methods.sales_invoice.before_validate",
+	}
+}
 
 # Scheduled Tasks
 # ---------------
