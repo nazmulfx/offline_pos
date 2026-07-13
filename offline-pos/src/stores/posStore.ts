@@ -553,8 +553,11 @@ export const usePOSStore = defineStore('pos', () => {
 
     if (existingIdx !== -1) {
       const existing = cartItems.value[existingIdx];
-      if (item.is_stock_item && existing.qty + 1 > actualQty) {
-        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available.`);
+      const neededQty = (existing.qty + 1) * (existing.conversion_factor || 1);
+      if (item.is_stock_item && neededQty > actualQty) {
+        const factor = existing.conversion_factor || 1;
+        const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${existing.uom}.`);
         return;
       }
       existing.qty += 1;
@@ -620,16 +623,16 @@ export const usePOSStore = defineStore('pos', () => {
     );
   }
 
-  async function updateQty(item_code: string, qty: number, batch_no: string = '', uom: string = '') {
+  async function updateQty(item_code: string, qty: number, batch_no: string = '', uom: string = ''): Promise<boolean> {
     const targetBatch = batch_no || '';
     const idx = cartItems.value.findIndex(
       (ci) => ci.item_code === item_code && (uom === '' || ci.uom === uom) && (ci.batch_no || '') === targetBatch
     );
-    if (idx === -1) return;
+    if (idx === -1) return false;
     const item = cartItems.value[idx];
     if (qty <= 0) {
       removeFromCart(item_code, batch_no, uom);
-      return;
+      return true;
     }
 
     if (network.isOnline && (item.has_serial_no || item.has_batch_no)) {
@@ -637,7 +640,27 @@ export const usePOSStore = defineStore('pos', () => {
     }
 
     const meta = serialBatchMap.value[item_code];
-    let actualQty = item.is_stock_item ? items.value.find((i) => i.item_code === item_code)?.actual_qty || 999999 : 999999;
+    let actualQty = 999999;
+    if (item.is_stock_item) {
+      const catalogItem = items.value.find((i) => i.item_code === item_code);
+      if (catalogItem?.actual_qty !== undefined) {
+        actualQty = catalogItem.actual_qty;
+      } else {
+        const db = await openPOSDB();
+        const tx = db.transaction('items', 'readonly');
+        const store = tx.objectStore('items');
+        const dbItem = await new Promise<any>((resolve) => {
+          const req = store.get(item_code);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve(null);
+        });
+        if (dbItem?.actual_qty !== undefined) {
+          actualQty = dbItem.actual_qty;
+        } else {
+          actualQty = 0;
+        }
+      }
+    }
     if (meta) {
       if (meta.has_serial_no) {
         const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
@@ -647,15 +670,18 @@ export const usePOSStore = defineStore('pos', () => {
       }
     }
 
-    if (item.is_stock_item && qty * (item.conversion_factor || 1) > actualQty) {
-      showAlert("Stock Limit Exceeded", `Cannot set quantity to ${qty}. Only ${actualQty} stock available.`);
-      return;
+    const factor = item.conversion_factor || 1;
+    if (item.is_stock_item && qty * factor > actualQty) {
+      const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+      showAlert("Stock Limit Exceeded", `Cannot set quantity to ${qty}. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${item.uom}.`);
+      return false;
     }
 
     item.qty = qty;
     item.amount = qty * item.rate;
 
     handleCartItemQtyChange(item, idx);
+    return true;
   }
 
 
@@ -701,13 +727,50 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
-  function updateCartItemConversionFactor(item_code: string, factor: number, batch_no: string = '') {
+  async function updateCartItemConversionFactor(item_code: string, factor: number, batch_no: string = ''): Promise<boolean> {
     const idx = selectedItemIdx.value !== null ? selectedItemIdx.value : cartItems.value.findIndex((ci) => ci.item_code === item_code);
     if (idx !== -1) {
       const item = cartItems.value[idx];
+      if (item.is_stock_item) {
+        const neededQty = item.qty * factor;
+        const catalogItem = items.value.find((i) => i.item_code === item_code);
+        let actualQty = catalogItem?.actual_qty !== undefined ? catalogItem.actual_qty : 0;
+        
+        if (catalogItem?.actual_qty === undefined) {
+          const db = await openPOSDB();
+          const tx = db.transaction('items', 'readonly');
+          const store = tx.objectStore('items');
+          const dbItem = await new Promise<any>((resolve) => {
+            const req = store.get(item_code);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+          });
+          if (dbItem?.actual_qty !== undefined) {
+            actualQty = dbItem.actual_qty;
+          }
+        }
+        
+        const meta = serialBatchMap.value[item_code];
+        if (meta) {
+          if (meta.has_serial_no) {
+            const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
+            actualQty = activeSerials.length;
+          } else if (meta.has_batch_no) {
+            actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
+          }
+        }
+
+        if (neededQty > actualQty) {
+          const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+          showAlert("Stock Limit Exceeded", `Cannot change UOM. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${item.uom}.`);
+          return false;
+        }
+      }
       item.conversion_factor = factor;
       handleCartItemQtyChange(item, idx);
+      return true;
     }
+    return false;
   }
 
   function updateCartItemPrice(item_code: string, priceListRate: number, batch_no: string = '') {
@@ -1323,16 +1386,17 @@ export const usePOSStore = defineStore('pos', () => {
       const writeStore = writeTx.objectStore('items');
 
       for (const cartItem of itemsToDecrement) {
+        const decQty = cartItem.qty * (cartItem.conversion_factor || 1);
         // Update reactive state
         const matchedItem = items.value.find((i) => i.item_code === cartItem.item_code);
         if (matchedItem && matchedItem.is_stock_item) {
-          matchedItem.actual_qty = Math.max(0, matchedItem.actual_qty - cartItem.qty);
+          matchedItem.actual_qty = Math.max(0, matchedItem.actual_qty - decQty);
         }
 
         // Update local DB cache
         const cachedItem = cachedItemsMap[cartItem.item_code];
         if (cachedItem && cachedItem.is_stock_item) {
-          cachedItem.actual_qty = Math.max(0, (cachedItem.actual_qty || 0) - cartItem.qty);
+          cachedItem.actual_qty = Math.max(0, (cachedItem.actual_qty || 0) - decQty);
           writeStore.put(cachedItem);
         }
       }
@@ -1418,6 +1482,67 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
+  async function checkCartStock(): Promise<{ valid: boolean; error?: string }> {
+    const db = await openPOSDB();
+    const readTx = db.transaction('items', 'readonly');
+    const readStore = readTx.objectStore('items');
+    
+    const cachedItemsMap: Record<string, any> = {};
+    const readPromises = cartItems.value.map((cartItem) => {
+      return new Promise<void>((resolve) => {
+        const req = readStore.get(cartItem.item_code);
+        req.onsuccess = () => {
+          if (req.result) {
+            cachedItemsMap[cartItem.item_code] = req.result;
+          }
+          resolve();
+        };
+        req.onerror = () => resolve();
+      });
+    });
+    await Promise.all(readPromises);
+
+    for (let idx = 0; idx < cartItems.value.length; idx++) {
+      const ci = cartItems.value[idx];
+      if (ci.is_stock_item !== 1) continue;
+
+      const meta = serialBatchMap.value[ci.item_code];
+      const catalogItem = items.value.find((i) => i.item_code === ci.item_code);
+      const dbItem = cachedItemsMap[ci.item_code];
+
+      let actualQty = catalogItem?.actual_qty !== undefined ? catalogItem.actual_qty : (dbItem?.actual_qty !== undefined ? dbItem.actual_qty : 0);
+
+      if (meta) {
+        if (meta.has_serial_no) {
+          const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
+          actualQty = activeSerials.length;
+        } else if (meta.has_batch_no) {
+          actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
+        }
+      }
+
+      const neededQty = ci.qty * (ci.conversion_factor || 1);
+      if (neededQty > actualQty) {
+        const factor = ci.conversion_factor || 1;
+        const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+        let message = `in cart, for item: "${ci.item_name}" in row no ${idx + 1}, you added ${ci.qty} ${ci.uom}`;
+        if (ci.conversion_factor && ci.conversion_factor !== 1) {
+          message += `, UOM conversion factor is ${ci.qty}*${ci.conversion_factor}=${neededQty} Unit need in the stock but available only ${actualQty}qty`;
+        } else {
+          message += ` need in the stock but available only ${actualQty}qty`;
+        }
+        message += `\nMaximum allowed quantity is ${maxAllowed} ${ci.uom}.`;
+        message += `\n\nplease fix it and sale`;
+        
+        return {
+          valid: false,
+          error: message
+        };
+      }
+    }
+    return { valid: true };
+  }
+
   function addScannedItemToCart(item: POSItem, batchNo: string, serialNo: string) {
     const meta = serialBatchMap.value[item.item_code];
     let actualQty = item.actual_qty;
@@ -1463,6 +1588,14 @@ export const usePOSStore = defineStore('pos', () => {
 
     if (existingIdx !== -1) {
       const existing = cartItems.value[existingIdx];
+
+      const neededQty = (existing.qty + 1) * (existing.conversion_factor || 1);
+      if (item.is_stock_item && neededQty > actualQty) {
+        const factor = existing.conversion_factor || 1;
+        const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${existing.uom}.`);
+        return;
+      }
 
       if (!existing.allocations) {
         existing.allocations = [];
@@ -1541,6 +1674,11 @@ export const usePOSStore = defineStore('pos', () => {
       
       selectCartItem(existingIdx);
     } else {
+      if (item.is_stock_item && conversionFactor > actualQty) {
+        const maxAllowed = Math.floor((actualQty / conversionFactor) * 1000) / 1000;
+        showAlert("Stock Limit Exceeded", `Cannot add. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${uom}.`);
+        return;
+      }
       const newCartItem: CartItem = {
         item_code: item.item_code,
         item_name: item.item_name,
@@ -1691,7 +1829,7 @@ export const usePOSStore = defineStore('pos', () => {
     selectedItemIdx, warehouses, selectedCartItem,
     addToCart, removeFromCart, updateQty, updateRate, updateDiscount,
     selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor, updateCartItemPrice,
-    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData, decrementStock,
+    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData, decrementStock, checkCartStock,
     // Serial & Batch
     serialBatchMap, pickStrategy, getAvailableStockPool, autoSelectSerialsAndBatches, handleCartItemQtyChange, handleBarcodeScanOrSearch, refreshSerialBatchDataFromServer,
     // designed alert

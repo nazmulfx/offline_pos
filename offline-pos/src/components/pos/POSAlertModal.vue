@@ -119,6 +119,7 @@ const alertType = computed(() => {
   color: var(--pos-text-muted, #64748b);
   line-height: 1.5;
   margin: 0 0 24px;
+  white-space: pre-line;
 }
 
 .alert-modal__btn {
