@@ -297,11 +297,21 @@ async function submitPayment() {
       close();
     } else {
       if (printWindow) printWindow.close();
-      pos.showAlert('Payment Error', result.error || 'Failed to submit invoice');
+      const errText = result.error || 'Failed to submit invoice';
+      if (errText.includes('CSRFTokenError') || errText.includes('Invalid Request')) {
+        pos.showAlert('CSRF Token Error', 'Your security session has expired. Please reload the page to post data to the online server.', 'error');
+      } else {
+        pos.showAlert('Payment Error', errText);
+      }
     }
   } catch (err: any) {
     if (printWindow) printWindow.close();
-    pos.showAlert('Payment Error', err?.message || 'Failed to submit invoice');
+    const errMsg = err?.message || err?.exc || '';
+    if (err?.exc_type === 'CSRFTokenError' || errMsg.includes('CSRFTokenError') || errMsg.includes('Invalid Request')) {
+      pos.showAlert('CSRF Token Error', 'Your security session has expired. Please reload the page to post data to the online server.', 'error');
+    } else {
+      pos.showAlert('Payment Error', err?.message || 'Failed to submit invoice');
+    }
   } finally {
     isSubmitting.value = false;
   }
