@@ -200,6 +200,7 @@ export const usePOSStore = defineStore('pos', () => {
 
     if (network.isOnline) {
       try {
+        console.log(`[POSStore] Fetching Party Balance (company: "${company}", party: "${customerName}") from server...`);
         const result = await call('frappe.client.get_list', {
           doctype: 'Party Balance',
           filters: { company, party: customerName, party_type: partyType },
@@ -321,6 +322,7 @@ export const usePOSStore = defineStore('pos', () => {
           const itemCodes = result.map((i: any) => i.item_code);
           const priceList = session.value.price_list;
 
+          console.log(`[POSStore] Fetching Price List ("${priceList}") details and UOM conversion details for ${result.length} items from server...`);
           const [uomDetails, priceDetails] = await Promise.all([
             call('frappe.client.get_list', {
               doctype: 'UOM Conversion Detail',
@@ -448,6 +450,7 @@ export const usePOSStore = defineStore('pos', () => {
       }
       
       if (!customerObj && network.isOnline) {
+        console.log(`[POSStore] Fetching Customer "${customerName}" from server...`);
         const result = await call('frappe.client.get', {
           doctype: 'Customer',
           name: customerName,
@@ -1084,6 +1087,7 @@ export const usePOSStore = defineStore('pos', () => {
     const warehouse = session.value?.warehouse;
     if (!warehouse) return;
     try {
+      console.log(`[POSStore] Fetching Serial and Batch stock data for warehouse "${warehouse}" from server...`);
       const sbRes = await call('offline_pos.api.get_serial_batch_data', {
         warehouse: warehouse
       });
@@ -1103,6 +1107,7 @@ export const usePOSStore = defineStore('pos', () => {
     const warehouse = session.value?.warehouse;
     if (!warehouse) return;
     try {
+      console.log(`[POSStore] Fetching Serial and Batch stock data for item "${itemCode}" in warehouse "${warehouse}" from server...`);
       const sbRes = await call('offline_pos.api.get_serial_batch_data', {
         warehouse: warehouse,
         item_code: itemCode
@@ -1128,6 +1133,7 @@ export const usePOSStore = defineStore('pos', () => {
     let defaultCustomerName: string | null = null;
     try {
       if (network.isOnline) {
+        console.log(`[POSStore] Fetching POS Settings (invoice_type, custom_default_customer) from server...`);
         const [invType, defCust] = await Promise.all([
           call('frappe.client.get_single_value', {
             doctype: 'POS Settings',
@@ -1156,6 +1162,7 @@ export const usePOSStore = defineStore('pos', () => {
     let fullOpeningEntry = openingEntry;
     if (!openingEntry.balance_details) {
       try {
+        console.log(`[POSStore] Fetching POS Opening Entry "${openingEntry.name}" from server...`);
         fullOpeningEntry = await call('frappe.client.get', {
           doctype: 'POS Opening Entry',
           name: openingEntry.name,
@@ -1179,6 +1186,7 @@ export const usePOSStore = defineStore('pos', () => {
     let taxesAndChargesData: any[] = [];
     if (profileData.taxes_and_charges) {
       try {
+        console.log(`[POSStore] Fetching Sales Taxes and Charges Template "${profileData.taxes_and_charges}" from server...`);
         const templateDoc = await call('frappe.client.get', {
           doctype: 'Sales Taxes and Charges Template',
           name: profileData.taxes_and_charges,
@@ -1226,6 +1234,7 @@ export const usePOSStore = defineStore('pos', () => {
       let loaded = false;
       if (network.isOnline) {
         try {
+          console.log(`[POSStore] Fetching Warehouse list from server...`);
           const whList = await call('frappe.client.get_list', {
             doctype: 'Warehouse',
             fields: ['name'],
@@ -1289,6 +1298,7 @@ export const usePOSStore = defineStore('pos', () => {
           const itemCodes = result.map((i: any) => i.item_code);
           const priceList = session.value.price_list;
           
+          console.log(`[POSStore] Prefetching UOM Conversion Detail and Item Price details for "${priceList}" price list from server...`);
           const [uomDetails, priceDetails] = await Promise.all([
             call('frappe.client.get_list', {
               doctype: 'UOM Conversion Detail',
@@ -1385,6 +1395,7 @@ export const usePOSStore = defineStore('pos', () => {
           filters.customer_group = ['in', customerGroups];
         }
         
+        console.log(`[POSStore] Prefetching Customers (start: ${start}, length: ${batchSize}) from server...`);
         const result = await call('frappe.client.get_list', {
           doctype: 'Customer',
           filters,
@@ -1441,6 +1452,7 @@ export const usePOSStore = defineStore('pos', () => {
       // 2. If online, fetch from ERPNext
       if (network.isOnline) {
         try {
+          console.log(`[POSStore] Fetching Item "${itemCode}" details and Item Price records (Price List: "${priceList}") from server...`);
           const itemDoc = await call('frappe.client.get', {
             doctype: 'Item',
             name: itemCode,
