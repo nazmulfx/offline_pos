@@ -49,7 +49,7 @@
           <input
             type="number"
             :value="item.qty"
-            @input="pos.updateQty(item.item_code, parseFloat(($event.target as HTMLInputElement).value) || 0, item.batch_no)"
+            @input="handleQtyInput"
             @focus="activeField = 'qty'"
             class="item-details__input"
             :class="{ 'item-details__input--active': activeField === 'qty' }"
@@ -213,6 +213,7 @@
           hide-header
           hide-modes
           :initial-mode="activeField || 'qty'"
+          :key="numpadKey"
           @update="onNumpadUpdate"
         />
       </div>
@@ -232,6 +233,7 @@ const imgError = ref(false);
 const activeField = ref<'qty' | 'rate' | 'discount' | null>('qty');
 const uomConversionFactors = ref<Array<{ uom: string; conversion_factor: number }>>([]);
 const uomPrices = ref<Record<string, number>>({});
+const numpadKey = ref(0);
 
 watch(
   () => item.value?.item_code,
@@ -272,7 +274,7 @@ const availableUoms = computed(() => {
   return Array.from(list);
 });
 
-function onUOMChanged(newUom: string) {
+async function onUOMChanged(newUom: string) {
   if (!item.value) return;
   let factor = 1;
   const match = uomConversionFactors.value.find((f) => f.uom === newUom);
@@ -280,6 +282,16 @@ function onUOMChanged(newUom: string) {
     factor = match.conversion_factor || 1;
   } else if (newUom === posItem.value?.stock_uom) {
     factor = 1;
+  }
+
+  const originalUom = item.value.uom;
+  const success = await pos.updateCartItemConversionFactor(item.value.item_code, factor, item.value.batch_no);
+  if (!success) {
+    const selectEl = document.querySelector('.item-details__select') as HTMLSelectElement;
+    if (selectEl) {
+      selectEl.value = originalUom;
+    }
+    return;
   }
 
   let newPriceListRate = 0;
@@ -290,7 +302,6 @@ function onUOMChanged(newUom: string) {
   }
 
   pos.updateCartItemUOM(item.value.item_code, newUom, item.value.batch_no);
-  pos.updateCartItemConversionFactor(item.value.item_code, factor, item.value.batch_no);
   pos.updateCartItemPrice(item.value.item_code, newPriceListRate, item.value.batch_no);
 }
 
@@ -298,16 +309,30 @@ function formatCurrency(value: number | undefined): string {
   return globalFormatCurrency(value, pos.session?.currency);
 }
 
-function onNumpadUpdate(mode: string, value: string) {
+async function handleQtyInput(e: Event) {
+  if (!item.value) return;
+  const inputEl = e.target as HTMLInputElement;
+  const targetVal = parseFloat(inputEl.value) || 0;
+  const success = await pos.updateQty(item.value.item_code, targetVal, item.value.batch_no);
+  if (!success) {
+    inputEl.value = String(item.value.qty);
+    numpadKey.value++;
+  }
+}
+
+async function onNumpadUpdate(mode: string, value: string) {
   if (!item.value) return;
   const n = parseFloat(value) || 0;
-  if (mode === 'qty') pos.updateQty(item.value.item_code, n, item.value.batch_no);
-  else if (mode === 'rate') {
+  if (mode === 'qty') {
+    const success = await pos.updateQty(item.value.item_code, n, item.value.batch_no);
+    if (!success) {
+      numpadKey.value++;
+    }
+  } else if (mode === 'rate') {
     if (pos.session?.allow_rate_change === 1) {
       pos.updateRate(item.value.item_code, n, item.value.batch_no);
     }
-  }
-  else if (mode === 'discount') {
+  } else if (mode === 'discount') {
     if (pos.session?.allow_discount_change === 1) {
       pos.updateDiscount(item.value.item_code, n, item.value.batch_no);
     }

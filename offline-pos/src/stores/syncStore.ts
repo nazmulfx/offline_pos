@@ -95,11 +95,11 @@ export const useSyncStore = defineStore('sync', () => {
       } catch (err) {
         console.warn('[SyncStore] Failed to show sync already started alert:', err);
       }
-      return;
+      return { customers: 0, invoices: 0, others: 0, errorCount: 0 };
     }
     if (!isAuthenticated()) {
       console.warn('[SyncStore] syncAll() skipped — not authenticated.');
-      return;
+      return { customers: 0, invoices: 0, others: 0, errorCount: 0 };
     }
 
     // Lock synchronously before any async operations to prevent race conditions
@@ -108,11 +108,15 @@ export const useSyncStore = defineStore('sync', () => {
     failedItems.value = {};  // reset per-item errors
     lastSyncedInvoiceCount.value = 0;
 
+    let syncedCustomers = 0;
+    let syncedInvoices = 0;
+    let syncedOthers = 0;
+
     try {
       const allItems = await getSyncQueue();
       if (!allItems.length) {
         pendingCount.value = 0;
-        return;
+        return { customers: 0, invoices: 0, others: 0, errorCount: 0 };
       }
 
       await refreshCSRFToken();
@@ -151,6 +155,7 @@ export const useSyncStore = defineStore('sync', () => {
           }
 
           await removeSyncItem(item.id);
+          syncedCustomers++;
         } catch (err: any) {
           const msg = extractErrorMessage(err);
           failedItems.value[item.id] = msg;
@@ -166,7 +171,7 @@ export const useSyncStore = defineStore('sync', () => {
                 message: 'Session expired. Please log in again to sync.'
               }
             });
-            return;
+            return { customers: syncedCustomers, invoices: syncedInvoices, others: syncedOthers, errorCount: errors.length };
           }
         }
       }
@@ -190,6 +195,7 @@ export const useSyncStore = defineStore('sync', () => {
           await syncInvoiceItem(item);
           await removeSyncItem(item.id);
           lastSyncedInvoiceCount.value++;
+          syncedInvoices++;
         } catch (err: any) {
           const msg = extractErrorMessage(err);
           failedItems.value[item.id] = msg;
@@ -216,6 +222,7 @@ export const useSyncStore = defineStore('sync', () => {
         try {
           await call('frappe.client.insert', { doc: item.payload }, { skipAuthRedirect: true });
           await removeSyncItem(item.id);
+          syncedOthers++;
         } catch (err: any) {
           errors.push(extractErrorMessage(err));
         }
@@ -233,6 +240,13 @@ export const useSyncStore = defineStore('sync', () => {
       } catch (e) {
         console.warn('[SyncStore] Failed to refresh serial/batch data after sync:', e);
       }
+
+      return {
+        customers: syncedCustomers,
+        invoices: syncedInvoices,
+        others: syncedOthers,
+        errorCount: errors.length,
+      };
     } finally {
       isSyncing.value = false;
       lastSyncAt.value = new Date();

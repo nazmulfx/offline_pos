@@ -7,7 +7,7 @@ import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
 import { fetchItems, fetchItemByBarcode } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
-import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData } from '../db/posDB';
+import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers } from '../db/posDB';
 import call from '../lib/call';
 
 export interface POSItem {
@@ -357,6 +357,42 @@ export const usePOSStore = defineStore('pos', () => {
     selectedCustomer.value = customer;
   }
 
+  async function setDefaultCustomer(customerName: string) {
+    if (!customerName) return;
+    try {
+      let customerObj = customers.value.find(c => c.name === customerName);
+      
+      if (!customerObj) {
+        const cached = await getCachedCustomers(customerName);
+        customerObj = cached.find(c => c.name === customerName);
+      }
+      
+      if (!customerObj && network.isOnline) {
+        const result = await call('frappe.client.get', {
+          doctype: 'Customer',
+          name: customerName,
+        });
+        if (result) {
+          customerObj = {
+            name: result.name,
+            customer_name: result.customer_name,
+            mobile_no: result.mobile_no || '',
+            email_id: result.email_id || '',
+            customer_group: result.customer_group || '',
+            loyalty_program: result.loyalty_program || '',
+          };
+          await cacheCustomers([customerObj]);
+        }
+      }
+      
+      if (customerObj) {
+        selectedCustomer.value = customerObj;
+      }
+    } catch (err) {
+      console.warn('[POSStore] setDefaultCustomer failed:', err);
+    }
+  }
+
   // ─── Serial & Batch Selection Helpers ─────────────────────────────────────
   function getAvailableStockPool(itemCode: string, excludeIdx: number | null = null) {
     const meta = serialBatchMap.value[itemCode];
@@ -553,8 +589,11 @@ export const usePOSStore = defineStore('pos', () => {
 
     if (existingIdx !== -1) {
       const existing = cartItems.value[existingIdx];
-      if (item.is_stock_item && existing.qty + 1 > actualQty) {
-        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available.`);
+      const neededQty = (existing.qty + 1) * (existing.conversion_factor || 1);
+      if (item.is_stock_item && neededQty > actualQty) {
+        const factor = existing.conversion_factor || 1;
+        const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${existing.uom}.`);
         return;
       }
       existing.qty += 1;
@@ -620,16 +659,16 @@ export const usePOSStore = defineStore('pos', () => {
     );
   }
 
-  async function updateQty(item_code: string, qty: number, batch_no: string = '', uom: string = '') {
+  async function updateQty(item_code: string, qty: number, batch_no: string = '', uom: string = ''): Promise<boolean> {
     const targetBatch = batch_no || '';
     const idx = cartItems.value.findIndex(
       (ci) => ci.item_code === item_code && (uom === '' || ci.uom === uom) && (ci.batch_no || '') === targetBatch
     );
-    if (idx === -1) return;
+    if (idx === -1) return false;
     const item = cartItems.value[idx];
     if (qty <= 0) {
       removeFromCart(item_code, batch_no, uom);
-      return;
+      return true;
     }
 
     if (network.isOnline && (item.has_serial_no || item.has_batch_no)) {
@@ -637,7 +676,27 @@ export const usePOSStore = defineStore('pos', () => {
     }
 
     const meta = serialBatchMap.value[item_code];
-    let actualQty = item.is_stock_item ? items.value.find((i) => i.item_code === item_code)?.actual_qty || 999999 : 999999;
+    let actualQty = 999999;
+    if (item.is_stock_item) {
+      const catalogItem = items.value.find((i) => i.item_code === item_code);
+      if (catalogItem?.actual_qty !== undefined) {
+        actualQty = catalogItem.actual_qty;
+      } else {
+        const db = await openPOSDB();
+        const tx = db.transaction('items', 'readonly');
+        const store = tx.objectStore('items');
+        const dbItem = await new Promise<any>((resolve) => {
+          const req = store.get(item_code);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => resolve(null);
+        });
+        if (dbItem?.actual_qty !== undefined) {
+          actualQty = dbItem.actual_qty;
+        } else {
+          actualQty = 0;
+        }
+      }
+    }
     if (meta) {
       if (meta.has_serial_no) {
         const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
@@ -647,15 +706,18 @@ export const usePOSStore = defineStore('pos', () => {
       }
     }
 
-    if (item.is_stock_item && qty * (item.conversion_factor || 1) > actualQty) {
-      showAlert("Stock Limit Exceeded", `Cannot set quantity to ${qty}. Only ${actualQty} stock available.`);
-      return;
+    const factor = item.conversion_factor || 1;
+    if (item.is_stock_item && qty * factor > actualQty) {
+      const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+      showAlert("Stock Limit Exceeded", `Cannot set quantity to ${qty}. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${item.uom}.`);
+      return false;
     }
 
     item.qty = qty;
     item.amount = qty * item.rate;
 
     handleCartItemQtyChange(item, idx);
+    return true;
   }
 
 
@@ -701,13 +763,50 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
-  function updateCartItemConversionFactor(item_code: string, factor: number, batch_no: string = '') {
+  async function updateCartItemConversionFactor(item_code: string, factor: number, batch_no: string = ''): Promise<boolean> {
     const idx = selectedItemIdx.value !== null ? selectedItemIdx.value : cartItems.value.findIndex((ci) => ci.item_code === item_code);
     if (idx !== -1) {
       const item = cartItems.value[idx];
+      if (item.is_stock_item) {
+        const neededQty = item.qty * factor;
+        const catalogItem = items.value.find((i) => i.item_code === item_code);
+        let actualQty = catalogItem?.actual_qty !== undefined ? catalogItem.actual_qty : 0;
+        
+        if (catalogItem?.actual_qty === undefined) {
+          const db = await openPOSDB();
+          const tx = db.transaction('items', 'readonly');
+          const store = tx.objectStore('items');
+          const dbItem = await new Promise<any>((resolve) => {
+            const req = store.get(item_code);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+          });
+          if (dbItem?.actual_qty !== undefined) {
+            actualQty = dbItem.actual_qty;
+          }
+        }
+        
+        const meta = serialBatchMap.value[item_code];
+        if (meta) {
+          if (meta.has_serial_no) {
+            const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
+            actualQty = activeSerials.length;
+          } else if (meta.has_batch_no) {
+            actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
+          }
+        }
+
+        if (neededQty > actualQty) {
+          const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+          showAlert("Stock Limit Exceeded", `Cannot change UOM. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${item.uom}.`);
+          return false;
+        }
+      }
       item.conversion_factor = factor;
       handleCartItemQtyChange(item, idx);
+      return true;
     }
+    return false;
   }
 
   function updateCartItemPrice(item_code: string, priceListRate: number, batch_no: string = '') {
@@ -722,7 +821,14 @@ export const usePOSStore = defineStore('pos', () => {
 
   function clearCart() {
     cartItems.value = [];
-    selectedCustomer.value = null;
+    
+    const defCustName = localStorage.getItem('pos_default_customer_name');
+    if (defCustName) {
+      setDefaultCustomer(defCustName);
+    } else {
+      selectedCustomer.value = null;
+    }
+
     cartDiscount.value = 0;
     additionalDiscount.value = 0;
     selectedItemIdx.value = null;
@@ -904,10 +1010,11 @@ export const usePOSStore = defineStore('pos', () => {
       if (sbRes && sbRes.data) {
         await cacheSerialBatchData(sbRes.data);
         localStorage.setItem('pick_serial_and_batch_based_on', sbRes.pick_serial_and_batch_based_on || 'FIFO');
-        await loadSerialBatchData();
       }
     } catch (err) {
       console.error('[POSStore] Failed to refresh serial and batch data from server:', err);
+    } finally {
+      await loadSerialBatchData();
     }
   }
 
@@ -936,16 +1043,34 @@ export const usePOSStore = defineStore('pos', () => {
   }
 
   async function initSession(openingEntry: any, profileData: any) {
-    // Fetch invoice_type from POS Settings (Sales Invoice or POS Invoice)
+    // Fetch invoice_type and custom_default_customer from POS Settings
     let invoiceType: 'POS Invoice' | 'Sales Invoice' = 'POS Invoice';
+    let defaultCustomerName: string | null = null;
     try {
-      const posSettings = await call('frappe.client.get_single_value', {
-        doctype: 'POS Settings',
-        field: 'invoice_type',
-      });
-      if (posSettings === 'Sales Invoice') invoiceType = 'Sales Invoice';
-    } catch {
-      console.warn('[POSStore] Could not fetch POS Settings invoice_type, defaulting to POS Invoice');
+      if (network.isOnline) {
+        const [invType, defCust] = await Promise.all([
+          call('frappe.client.get_single_value', {
+            doctype: 'POS Settings',
+            field: 'invoice_type',
+          }),
+          call('frappe.client.get_single_value', {
+            doctype: 'POS Settings',
+            field: 'custom_default_customer',
+          }),
+        ]);
+        if (invType === 'Sales Invoice') invoiceType = 'Sales Invoice';
+        defaultCustomerName = defCust;
+        if (defaultCustomerName) {
+          localStorage.setItem('pos_default_customer_name', defaultCustomerName);
+        } else {
+          localStorage.removeItem('pos_default_customer_name');
+        }
+      } else {
+        defaultCustomerName = localStorage.getItem('pos_default_customer_name');
+      }
+    } catch (err) {
+      console.warn('[POSStore] Could not fetch POS Settings values:', err);
+      defaultCustomerName = localStorage.getItem('pos_default_customer_name');
     }
 
     let fullOpeningEntry = openingEntry;
@@ -1012,17 +1137,28 @@ export const usePOSStore = defineStore('pos', () => {
       disable_rounded_total: profileData.disable_rounded_total,
     };
 
+    if (!selectedCustomer.value && defaultCustomerName) {
+      await setDefaultCustomer(defaultCustomerName);
+    }
+
     // Load and cache warehouses list
     try {
+      let loaded = false;
       if (network.isOnline) {
-        const whList = await call('frappe.client.get_list', {
-          doctype: 'Warehouse',
-          fields: ['name'],
-          limit_page_length: 500,
-        });
-        warehouses.value = (whList || []).map((w: any) => w.name);
-        localStorage.setItem('pos_warehouses', JSON.stringify(warehouses.value));
-      } else {
+        try {
+          const whList = await call('frappe.client.get_list', {
+            doctype: 'Warehouse',
+            fields: ['name'],
+            limit_page_length: 500,
+          });
+          warehouses.value = (whList || []).map((w: any) => w.name);
+          localStorage.setItem('pos_warehouses', JSON.stringify(warehouses.value));
+          loaded = true;
+        } catch (whErr) {
+          console.warn('[POSStore] Failed to load warehouses online, falling back to local cache:', whErr);
+        }
+      }
+      if (!loaded) {
         const cachedWh = localStorage.getItem('pos_warehouses');
         if (cachedWh) warehouses.value = JSON.parse(cachedWh);
       }
@@ -1224,43 +1360,47 @@ export const usePOSStore = defineStore('pos', () => {
 
       // 2. If online, fetch from ERPNext
       if (network.isOnline) {
-        const itemDoc = await call('frappe.client.get', {
-          doctype: 'Item',
-          name: itemCode,
-        });
-        const uoms = itemDoc?.uoms || [];
+        try {
+          const itemDoc = await call('frappe.client.get', {
+            doctype: 'Item',
+            name: itemCode,
+          });
+          const uoms = itemDoc?.uoms || [];
 
-        const priceRecords = await call('frappe.client.get_list', {
-          doctype: 'Item Price',
-          filters: {
-            item_code: itemCode,
-            price_list: priceList,
-          },
-          fields: ['uom', 'price_list_rate'],
-          limit_page_length: 100,
-        }) || [];
+          const priceRecords = await call('frappe.client.get_list', {
+            doctype: 'Item Price',
+            filters: {
+              item_code: itemCode,
+              price_list: priceList,
+            },
+            fields: ['uom', 'price_list_rate'],
+            limit_page_length: 100,
+          }) || [];
 
-        const pricesMap: Record<string, number> = {};
-        if (cachedItem) {
-          if (cachedItem.price_list_rate !== undefined) {
-            pricesMap[cachedItem.uom || cachedItem.stock_uom] = cachedItem.price_list_rate;
+          const pricesMap: Record<string, number> = {};
+          if (cachedItem) {
+            if (cachedItem.price_list_rate !== undefined) {
+              pricesMap[cachedItem.uom || cachedItem.stock_uom] = cachedItem.price_list_rate;
+            }
           }
-        }
-        priceRecords.forEach((pr: any) => {
-          if (pr.uom && pr.price_list_rate !== undefined) {
-            pricesMap[pr.uom] = pr.price_list_rate;
-          }
-        });
+          priceRecords.forEach((pr: any) => {
+            if (pr.uom && pr.price_list_rate !== undefined) {
+              pricesMap[pr.uom] = pr.price_list_rate;
+            }
+          });
 
-        if (cachedItem) {
-          cachedItem.uoms = uoms;
-          cachedItem.prices = pricesMap;
-          cachedItem.price_list_name = priceList;
-          const writeTx = db.transaction('items', 'readwrite');
-          const writeStore = writeTx.objectStore('items');
-          writeStore.put(cachedItem);
+          if (cachedItem) {
+            cachedItem.uoms = uoms;
+            cachedItem.prices = pricesMap;
+            cachedItem.price_list_name = priceList;
+            const writeTx = db.transaction('items', 'readwrite');
+            const writeStore = writeTx.objectStore('items');
+            writeStore.put(cachedItem);
+          }
+          return { uoms, prices: pricesMap };
+        } catch (onlineErr) {
+          console.warn('[POSStore] Online fetch of item details failed, falling back to local data:', onlineErr);
         }
-        return { uoms, prices: pricesMap };
       }
 
       // 3. Fallback for offline mode if they were not cached
@@ -1311,16 +1451,17 @@ export const usePOSStore = defineStore('pos', () => {
       const writeStore = writeTx.objectStore('items');
 
       for (const cartItem of itemsToDecrement) {
+        const decQty = cartItem.qty * (cartItem.conversion_factor || 1);
         // Update reactive state
         const matchedItem = items.value.find((i) => i.item_code === cartItem.item_code);
         if (matchedItem && matchedItem.is_stock_item) {
-          matchedItem.actual_qty = Math.max(0, matchedItem.actual_qty - cartItem.qty);
+          matchedItem.actual_qty = Math.max(0, matchedItem.actual_qty - decQty);
         }
 
         // Update local DB cache
         const cachedItem = cachedItemsMap[cartItem.item_code];
         if (cachedItem && cachedItem.is_stock_item) {
-          cachedItem.actual_qty = Math.max(0, (cachedItem.actual_qty || 0) - cartItem.qty);
+          cachedItem.actual_qty = Math.max(0, (cachedItem.actual_qty || 0) - decQty);
           writeStore.put(cachedItem);
         }
       }
@@ -1406,6 +1547,67 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
+  async function checkCartStock(): Promise<{ valid: boolean; error?: string }> {
+    const db = await openPOSDB();
+    const readTx = db.transaction('items', 'readonly');
+    const readStore = readTx.objectStore('items');
+    
+    const cachedItemsMap: Record<string, any> = {};
+    const readPromises = cartItems.value.map((cartItem) => {
+      return new Promise<void>((resolve) => {
+        const req = readStore.get(cartItem.item_code);
+        req.onsuccess = () => {
+          if (req.result) {
+            cachedItemsMap[cartItem.item_code] = req.result;
+          }
+          resolve();
+        };
+        req.onerror = () => resolve();
+      });
+    });
+    await Promise.all(readPromises);
+
+    for (let idx = 0; idx < cartItems.value.length; idx++) {
+      const ci = cartItems.value[idx];
+      if (ci.is_stock_item !== 1) continue;
+
+      const meta = serialBatchMap.value[ci.item_code];
+      const catalogItem = items.value.find((i) => i.item_code === ci.item_code);
+      const dbItem = cachedItemsMap[ci.item_code];
+
+      let actualQty = catalogItem?.actual_qty !== undefined ? catalogItem.actual_qty : (dbItem?.actual_qty !== undefined ? dbItem.actual_qty : 0);
+
+      if (meta) {
+        if (meta.has_serial_no) {
+          const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
+          actualQty = activeSerials.length;
+        } else if (meta.has_batch_no) {
+          actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
+        }
+      }
+
+      const neededQty = ci.qty * (ci.conversion_factor || 1);
+      if (neededQty > actualQty) {
+        const factor = ci.conversion_factor || 1;
+        const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+        let message = `in cart, for item: "${ci.item_name}" in row no ${idx + 1}, you added ${ci.qty} ${ci.uom}`;
+        if (ci.conversion_factor && ci.conversion_factor !== 1) {
+          message += `, UOM conversion factor is ${ci.qty}*${ci.conversion_factor}=${neededQty} Unit need in the stock but available only ${actualQty}qty`;
+        } else {
+          message += ` need in the stock but available only ${actualQty}qty`;
+        }
+        message += `\nMaximum allowed quantity is ${maxAllowed} ${ci.uom}.`;
+        message += `\n\nplease fix it and sale`;
+        
+        return {
+          valid: false,
+          error: message
+        };
+      }
+    }
+    return { valid: true };
+  }
+
   function addScannedItemToCart(item: POSItem, batchNo: string, serialNo: string) {
     const meta = serialBatchMap.value[item.item_code];
     let actualQty = item.actual_qty;
@@ -1451,6 +1653,14 @@ export const usePOSStore = defineStore('pos', () => {
 
     if (existingIdx !== -1) {
       const existing = cartItems.value[existingIdx];
+
+      const neededQty = (existing.qty + 1) * (existing.conversion_factor || 1);
+      if (item.is_stock_item && neededQty > actualQty) {
+        const factor = existing.conversion_factor || 1;
+        const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${existing.uom}.`);
+        return;
+      }
 
       if (!existing.allocations) {
         existing.allocations = [];
@@ -1529,6 +1739,11 @@ export const usePOSStore = defineStore('pos', () => {
       
       selectCartItem(existingIdx);
     } else {
+      if (item.is_stock_item && conversionFactor > actualQty) {
+        const maxAllowed = Math.floor((actualQty / conversionFactor) * 1000) / 1000;
+        showAlert("Stock Limit Exceeded", `Cannot add. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${uom}.`);
+        return;
+      }
       const newCartItem: CartItem = {
         item_code: item.item_code,
         item_name: item.item_name,
@@ -1659,10 +1874,19 @@ export const usePOSStore = defineStore('pos', () => {
 
   function clearSession() {
     session.value = null;
+    localStorage.removeItem('pos_default_customer_name');
     clearCart();
     items.value = [];
     customers.value = [];
     warehouses.value = [];
+  }
+
+  // Load default customer if not set
+  if (!selectedCustomer.value) {
+    const defCustName = localStorage.getItem('pos_default_customer_name');
+    if (defCustName) {
+      setDefaultCustomer(defCustName);
+    }
   }
 
   return {
@@ -1679,7 +1903,7 @@ export const usePOSStore = defineStore('pos', () => {
     selectedItemIdx, warehouses, selectedCartItem,
     addToCart, removeFromCart, updateQty, updateRate, updateDiscount,
     selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor, updateCartItemPrice,
-    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData, decrementStock,
+    clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData, decrementStock, checkCartStock,
     // Serial & Batch
     serialBatchMap, pickStrategy, getAvailableStockPool, autoSelectSerialsAndBatches, handleCartItemQtyChange, handleBarcodeScanOrSearch, refreshSerialBatchDataFromServer,
     // designed alert

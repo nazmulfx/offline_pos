@@ -7,11 +7,29 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 	});
 
 	// Add filters
+	var company_filter = page.add_field({
+		fieldname: 'company',
+		label: __('Company'),
+		fieldtype: 'Link',
+		options: 'Company',
+		default: frappe.defaults.get_default('company'),
+		change: function() {
+			refresh_report();
+		}
+	});
+
 	var pos_profile_filter = page.add_field({
 		fieldname: 'pos_profile',
 		label: __('POS Profile'),
 		fieldtype: 'Link',
 		options: 'POS Profile',
+		get_query: function() {
+			return {
+				filters: {
+					company: company_filter.get_value()
+				}
+			};
+		},
 		change: function() {
 			refresh_report();
 		}
@@ -42,7 +60,7 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 		fieldname: 'from_date',
 		label: __('From Date'),
 		fieldtype: 'Date',
-		default: frappe.datetime.add_days(frappe.datetime.get_today(), -1),
+		default: frappe.datetime.get_today(),
 		change: function() {
 			refresh_report();
 		}
@@ -64,8 +82,8 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 	var table_section = $('<div class="pos-table-card"></div>').appendTo(container);
 
 	// Helpers
-	function format_amount(val) {
-		return format_currency(val || 0, frappe.boot.sysdefaults.currency || 'USD');
+	function format_amount(val, currency) {
+		return format_currency(val || 0, currency || frappe.boot.sysdefaults.currency || 'USD');
 	}
 
 	function render_empty_state() {
@@ -80,44 +98,107 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 
 	function render_table(data) {
 		var total_sessions = data.length;
+		var total_cash_sales = 0;
+		var total_bank_card_sales = 0;
+		var total_credit_sales = 0;
 		var total_gross_sales = 0;
 		var total_returns = 0;
 		var total_net_sales = 0;
+		var total_expected_cash = 0;
+		var total_actual_cash = 0;
+		var total_difference = 0;
 
 		data.forEach(function(row) {
-			total_gross_sales += row.total_sales;
-			total_returns += row.returns;
-			total_net_sales += row.net_sales;
+			total_cash_sales += row.cash_sales || 0;
+			total_bank_card_sales += row.bank_card_sales || 0;
+			total_credit_sales += row.credit_sales || 0;
+			total_gross_sales += row.total_sales || 0;
+			total_returns += row.returns || 0;
+			total_net_sales += row.net_sales || 0;
+			total_expected_cash += row.expected_cash || 0;
+			total_actual_cash += row.actual_cash || 0;
+			total_difference += row.difference || 0;
 		});
 
+		var current_currency = (data && data.length > 0) ? data[0].currency : (frappe.boot.sysdefaults.currency || 'USD');
+
 		// Render summary cards
+		var diff_class = total_difference > 0 ? 'diff-positive' : (total_difference < 0 ? 'diff-negative' : 'diff-zero');
+		var diff_sign = total_difference > 0 ? '+' : '';
+
 		summary_section.html(`
-			<div class="summary-card">
-				<div class="summary-icon icon-sessions"><i class="fa fa-history"></i></div>
-				<div class="summary-details">
-					<span class="summary-label">${__('Total Sessions')}</span>
-					<span class="summary-value">${total_sessions}</span>
+			<div class="pos-summary-row">
+				<div class="summary-card">
+					<div class="summary-icon icon-cash"><i class="fa fa-money"></i></div>
+					<div class="summary-details">
+						<span class="summary-label">${__('Cash Sales')}</span>
+						<span class="summary-value">${format_amount(total_cash_sales, current_currency)}</span>
+					</div>
+				</div>
+				<div class="summary-operator">+</div>
+				<div class="summary-card">
+					<div class="summary-icon icon-bank"><i class="fa fa-credit-card"></i></div>
+					<div class="summary-details">
+						<span class="summary-label">${__('Bank/Card Sales')}</span>
+						<span class="summary-value">${format_amount(total_bank_card_sales, current_currency)}</span>
+					</div>
+				</div>
+				<div class="summary-operator">+</div>
+				<div class="summary-card">
+					<div class="summary-icon icon-credit"><i class="fa fa-handshake-o"></i></div>
+					<div class="summary-details">
+						<span class="summary-label">${__('Credit Sales')}</span>
+						<span class="summary-value">${format_amount(total_credit_sales, current_currency)}</span>
+					</div>
+				</div>
+				<div class="summary-operator">=</div>
+				<div class="summary-card">
+					<div class="summary-icon icon-sales"><i class="fa fa-shopping-cart"></i></div>
+					<div class="summary-details">
+						<span class="summary-label">${__('Total Sales')}</span>
+						<span class="summary-value">${format_amount(total_gross_sales, current_currency)}</span>
+					</div>
+				</div>
+				<div class="summary-operator">-</div>
+				<div class="summary-card">
+					<div class="summary-icon icon-returns"><i class="fa fa-reply"></i></div>
+					<div class="summary-details">
+						<span class="summary-label">${__('Returns')}</span>
+						<span class="summary-value">${format_amount(total_returns, current_currency)}</span>
+					</div>
+				</div>
+				<div class="summary-operator">=</div>
+				<div class="summary-card">
+					<div class="summary-icon icon-net"><i class="fa fa-line-chart"></i></div>
+					<div class="summary-details">
+						<span class="summary-label">${__('Net Sales')}</span>
+						<span class="summary-value">${format_amount(total_net_sales, current_currency)}</span>
+					</div>
 				</div>
 			</div>
-			<div class="summary-card">
-				<div class="summary-icon icon-sales"><i class="fa fa-shopping-cart"></i></div>
-				<div class="summary-details">
-					<span class="summary-label">${__('Gross Sales')}</span>
-					<span class="summary-value">${format_amount(total_gross_sales)}</span>
+			<div class="pos-summary-row" style="margin-top: 20px;">
+				<div class="summary-card">
+					<div class="summary-icon icon-expected"><i class="fa fa-calculator"></i></div>
+					<div class="summary-details">
+						<span class="summary-label">${__('Expected Cash')}</span>
+						<span class="summary-value">${format_amount(total_expected_cash, current_currency)}</span>
+					</div>
 				</div>
-			</div>
-			<div class="summary-card">
-				<div class="summary-icon icon-returns"><i class="fa fa-reply"></i></div>
-				<div class="summary-details">
-					<span class="summary-label">${__('Returns')}</span>
-					<span class="summary-value">${format_amount(total_returns)}</span>
+				<div class="summary-operator">-</div>
+				<div class="summary-card">
+					<div class="summary-icon icon-actual"><i class="fa fa-money"></i></div>
+					<div class="summary-details">
+						<span class="summary-label">${__('Actual Cash')}</span>
+						<span class="summary-value">${format_amount(total_actual_cash, current_currency)}</span>
+					</div>
 				</div>
-			</div>
-			<div class="summary-card">
-				<div class="summary-icon icon-net"><i class="fa fa-line-chart"></i></div>
-				<div class="summary-details">
-					<span class="summary-label">${__('Net Sales')}</span>
-					<span class="summary-value">${format_amount(total_net_sales)}</span>
+				<div class="summary-operator">=</div>
+				<div class="summary-card">
+					<div class="summary-icon icon-diff"><i class="fa fa-balance-scale"></i></div>
+					<div class="summary-details">
+						<span class="summary-label">${__('Difference')}</span>
+						<span class="summary-value ${diff_class}">${diff_sign}${format_amount(total_difference, current_currency)}</span>
+					</div>
 				</div>
 			</div>
 		`);
@@ -154,17 +235,17 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 			if (row.difference !== null) {
 				if (row.difference > 0) {
 					diff_class = 'diff-positive';
-					diff_text = '+' + format_amount(row.difference);
+					diff_text = '+' + format_amount(row.difference, row.currency);
 				} else if (row.difference < 0) {
 					diff_class = 'diff-negative';
-					diff_text = format_amount(row.difference);
+					diff_text = format_amount(row.difference, row.currency);
 				} else {
 					diff_class = 'diff-zero';
-					diff_text = format_amount(0);
+					diff_text = format_amount(0, row.currency);
 				}
 			}
 
-			var actual_cash_text = row.actual_cash !== null ? format_amount(row.actual_cash) : '-';
+			var actual_cash_text = row.actual_cash !== null ? format_amount(row.actual_cash, row.currency) : '-';
 
 			html += `
 				<tr class="session-row" data-session-id="${row.session_id}">
@@ -172,13 +253,13 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 					<td>${row.opening_time ? frappe.datetime.str_to_user(row.opening_time) : ''}</td>
 					<td>${row.closing_time ? frappe.datetime.str_to_user(row.closing_time) : `<span class="text-muted">${__('Still Open')}</span>`}</td>
 					<td><span class="badge ${status_class}">${__(row.status)}</span></td>
-					<td class="text-right">${format_amount(row.cash_sales)}</td>
-					<td class="text-right">${format_amount(row.bank_card_sales)}</td>
-					<td class="text-right">${format_amount(row.credit_sales)}</td>
-					<td class="text-right font-weight-bold">${format_amount(row.total_sales)}</td>
-					<td class="text-right text-danger">${format_amount(row.returns)}</td>
-					<td class="text-right font-weight-bold text-success">${format_amount(row.net_sales)}</td>
-					<td class="text-right">${format_amount(row.expected_cash)}</td>
+					<td class="text-right">${format_amount(row.cash_sales, row.currency)}</td>
+					<td class="text-right">${format_amount(row.bank_card_sales, row.currency)}</td>
+					<td class="text-right">${format_amount(row.credit_sales, row.currency)}</td>
+					<td class="text-right font-weight-bold">${format_amount(row.total_sales, row.currency)}</td>
+					<td class="text-right text-danger">${format_amount(row.returns, row.currency)}</td>
+					<td class="text-right font-weight-bold text-success">${format_amount(row.net_sales, row.currency)}</td>
+					<td class="text-right">${format_amount(row.expected_cash, row.currency)}</td>
 					<td class="text-right">${actual_cash_text}</td>
 					<td class="text-right font-weight-bold ${diff_class}">${diff_text}</td>
 				</tr>
@@ -210,6 +291,7 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 			callback: function(r) {
 				if (!r.message) return;
 				var details = r.message;
+				var session_currency = details.currency || frappe.boot.sysdefaults.currency || 'USD';
 
 				var d = new frappe.ui.Dialog({
 					title: `${__('POS Session Detail')} - ${session_id}`,
@@ -264,11 +346,11 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 				html += `
 											<tr>
 												<td>${__('Opening Balance')}</td>
-												<td class="text-right font-weight-bold">${format_amount(cash_opening)}</td>
+												<td class="text-right font-weight-bold">${format_amount(cash_opening, session_currency)}</td>
 											</tr>
 											<tr>
 												<td>${__('Expected Cash')}</td>
-												<td class="text-right font-weight-bold text-info">${format_amount(cash_expected)}</td>
+												<td class="text-right font-weight-bold text-info">${format_amount(cash_expected, session_currency)}</td>
 											</tr>
 				`;
 
@@ -278,11 +360,11 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 					html += `
 											<tr>
 												<td>${__('Actual Cash (Closed)')}</td>
-												<td class="text-right font-weight-bold">${format_amount(cash_closing)}</td>
+												<td class="text-right font-weight-bold">${format_amount(cash_closing, session_currency)}</td>
 											</tr>
 											<tr>
 												<td>${__('Difference')}</td>
-												<td class="text-right font-weight-bold ${diff_class}">${diff_sign}${format_amount(cash_difference)}</td>
+												<td class="text-right font-weight-bold ${diff_class}">${diff_sign}${format_amount(cash_difference, session_currency)}</td>
 											</tr>
 					`;
 				} else {
@@ -319,7 +401,7 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 						html += `
 							<tr>
 								<td>${__(p.mode_of_payment)}</td>
-								<td class="text-right font-weight-bold ${p.amount < 0 ? 'text-danger' : ''}">${format_amount(p.amount)}</td>
+								<td class="text-right font-weight-bold ${p.amount < 0 ? 'text-danger' : ''}">${format_amount(p.amount, session_currency)}</td>
 							</tr>
 						`;
 					});
@@ -367,8 +449,8 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 								<td>${inv.customer || ''}</td>
 								<td>${inv.posting_date ? frappe.datetime.str_to_user(inv.posting_date) : ''}</td>
 								<td>${type_badge}</td>
-								<td class="text-right font-weight-bold ${inv.grand_total < 0 ? 'text-danger' : ''}">${format_amount(inv.grand_total)}</td>
-								<td class="text-right text-muted">${format_amount(inv.outstanding_amount)}</td>
+								<td class="text-right font-weight-bold ${inv.grand_total < 0 ? 'text-danger' : ''}">${format_amount(inv.grand_total, session_currency)}</td>
+								<td class="text-right text-muted">${format_amount(inv.outstanding_amount, session_currency)}</td>
 							</tr>
 						`;
 					});
@@ -395,6 +477,7 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 
 	function refresh_report() {
 		var filters = {
+			company: page.fields_dict.company.get_value(),
 			pos_profile: page.fields_dict.pos_profile.get_value(),
 			user: page.fields_dict.user.get_value(),
 			status: page.fields_dict.status.get_value(),

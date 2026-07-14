@@ -36,7 +36,7 @@ export default class Auth {
       localStorage.setItem('last_logged_in_user', this.cookie.user_id);
     }
     // Recovery fallback if we are offline and have a cached user
-    else if (!navigator.onLine && localStorage.getItem('last_logged_in_user')) {
+    else if ((!navigator.onLine || localStorage.getItem('pos_forced_offline') === 'true') && localStorage.getItem('last_logged_in_user')) {
       this.isLoggedIn = true;
       this.user = localStorage.getItem('last_logged_in_user');
     }

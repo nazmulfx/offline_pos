@@ -171,7 +171,7 @@ def get_serial_batch_data(warehouse, item_code=None):
 
 
 @frappe.whitelist()
-def get_pos_session_summary(pos_profile=None, user=None, from_date=None, to_date=None, status=None):
+def get_pos_session_summary(pos_profile=None, user=None, from_date=None, to_date=None, status=None, company=None):
 	# Fetch cash modes
 	cash_modes = [d.name for d in frappe.db.get_all("Mode of Payment", filters={"type": "Cash"})]
 	if not cash_modes:
@@ -179,6 +179,8 @@ def get_pos_session_summary(pos_profile=None, user=None, from_date=None, to_date
 
 	# Build filters for POS Opening Entry
 	filters = {}
+	if company:
+		filters['company'] = company
 	if pos_profile:
 		filters['pos_profile'] = pos_profile
 	if user:
@@ -295,6 +297,13 @@ def get_pos_session_summary(pos_profile=None, user=None, from_date=None, to_date
 	for od in opening_details:
 		opening_details_by_session.setdefault(od.parent, []).append(od)
 
+	# Fetch company currencies
+	company_currencies = {}
+	for entry in opening_entries:
+		if entry.company and entry.company not in company_currencies:
+			currency = frappe.db.get_value("Company", entry.company, "default_currency")
+			company_currencies[entry.company] = currency or frappe.db.get_default("currency") or "USD"
+
 	results = []
 	for entry in opening_entries:
 		session_id = entry.name
@@ -385,6 +394,7 @@ def get_pos_session_summary(pos_profile=None, user=None, from_date=None, to_date
 			"pos_profile": entry.pos_profile,
 			"user": entry.user,
 			"company": entry.company,
+			"currency": company_currencies.get(entry.company, "USD"),
 			"cash_sales": cash_sales,
 			"bank_card_sales": bank_card_sales,
 			"credit_sales": credit_sales,
@@ -489,12 +499,17 @@ def get_pos_session_details(session_id):
 				"is_cash": cd.mode_of_payment in cash_modes
 			})
 
+	company_currency = frappe.db.get_value("Company", opening_entry.company, "default_currency") if opening_entry.company else None
+	if not company_currency:
+		company_currency = frappe.db.get_default("currency") or "USD"
+
 	return {
 		"invoices": invoices,
 		"payments": payment_summary,
 		"opening_balances": opening_balances,
 		"closing_balances": closing_balances,
-		"pos_closing_entry": opening_entry.pos_closing_entry
+		"pos_closing_entry": opening_entry.pos_closing_entry,
+		"currency": company_currency
 	}
 
 

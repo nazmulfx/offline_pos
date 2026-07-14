@@ -257,6 +257,12 @@ async function submitPayment() {
   if (!canSubmit.value || isSubmitting.value) return;
   if (!pos.selectedCustomer || !pos.session) return;
 
+  const stockCheck = await pos.checkCartStock();
+  if (!stockCheck.valid) {
+    pos.showAlert("Out of Stock", stockCheck.error || "Some items are out of stock.");
+    return;
+  }
+
   // Open blank print window synchronously inside click event handler to bypass popup blockers
   let printWindow: Window | null = null;
   const autoPrint = pos.session?.print_receipt_on_order_complete === 1;

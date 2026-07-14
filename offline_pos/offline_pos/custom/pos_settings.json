@@ -1,0 +1,30 @@
+{
+ "custom_fields": [
+  {
+   "allow_on_submit": 0,
+   "bold": 0,
+   "collapsible": 0,
+   "dt": "POS Settings",
+   "fieldname": "custom_default_customer",
+   "fieldtype": "Link",
+   "hidden": 0,
+   "in_global_search": 0,
+   "in_list_view": 0,
+   "in_standard_filter": 0,
+   "insert_after": "invoice_type",
+   "label": "Default Customer",
+   "no_copy": 0,
+   "options": "Customer",
+   "default": "Walk-In-Customer",
+   "read_only": 0,
+   "report_hide": 0,
+   "reqd": 0,
+   "unique": 0
+  }
+ ],
+ "custom_perms": [],
+ "doctype": "POS Settings",
+ "links": [],
+ "property_setters": [],
+ "sync_on_migrate": 1
+}

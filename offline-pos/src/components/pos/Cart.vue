@@ -131,7 +131,7 @@
 
     <!-- ── Pay button ──────────────────────────── -->
     <div class="cart__foot">
-      <button class="cart__pay" :disabled="!canCheckout" @click="emit('checkout')">
+      <button class="cart__pay" :disabled="!canCheckout" @click="handleCheckout">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16">
           <polyline points="20 6 9 17 4 12"/>
         </svg>
@@ -190,6 +190,15 @@ function fmt(v: number) {
 function triggerClearCart() {
   pos.clearCart();
   showClearConfirm.value = false;
+}
+
+async function handleCheckout() {
+  const stockCheck = await pos.checkCartStock();
+  if (!stockCheck.valid) {
+    pos.showAlert("Out of Stock", stockCheck.error || "Some items are out of stock.");
+    return;
+  }
+  emit('checkout');
 }
 </script>
 

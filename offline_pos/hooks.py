@@ -142,6 +142,11 @@ jinja = {
 # 		"on_trash": "method"
 # 	}
 # }
+doc_events = {
+	"Sales Invoice": {
+		"before_validate": "offline_pos.offline_pos.hooks_methods.sales_invoice.before_validate",
+	}
+}
 
 # Scheduled Tasks
 # ---------------
@@ -252,6 +257,15 @@ override_whitelisted_methods = {
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
+
+fixtures = [
+    {
+        "dt": "Customer",
+        "filters": [["name", "in", 
+			["Walk-In-Customer"]
+        ]]
+    }
+]
 
 
 website_route_rules = [{'from_route': '/offline-pos/<path:app_path>', 'to_route': 'offline-pos'}]
