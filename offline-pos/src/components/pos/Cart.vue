@@ -15,6 +15,9 @@
           <span class="cart__title">Cart</span>
           <span v-if="pos.cartCount > 0" class="cart__badge">{{ pos.cartCount }}</span>
         </div>
+        <div v-if="pos.selectedCustomer && pos.selectedCustomerBalance !== null" class="cart__cust-balance" :class="customerBalanceClass">
+          {{ customerBalanceInfo }}
+        </div>
         <button v-if="pos.cartItems.length > 0" class="cart__trash" @click="showClearConfirm = true" title="Clear cart">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
             <polyline points="3 6 5 6 21 6"/>
@@ -179,6 +182,32 @@ const currencySymbol = computed(() => {
   return getCurrencySymbol(pos.session?.currency);
 });
 
+const customerBalanceInfo = computed(() => {
+  if (pos.selectedCustomerBalance === null) return '';
+  const bal = pos.selectedCustomerBalance;
+  const absBal = Math.abs(bal);
+  const formatted = formatCurrency(absBal, pos.session?.currency);
+  if (bal > 0) {
+    return `Due: ${formatted}`;
+  } else if (bal < 0) {
+    return `Advance: ${formatted}`;
+  } else {
+    return `Due: ${formatted}`;
+  }
+});
+
+const customerBalanceClass = computed(() => {
+  if (pos.selectedCustomerBalance === null) return '';
+  const bal = pos.selectedCustomerBalance;
+  if (bal > 0) {
+    return 'cart__cust-balance--due';
+  } else if (bal < 0) {
+    return 'cart__cust-balance--advance';
+  } else {
+    return 'cart__cust-balance--zero';
+  }
+});
+
 const canCheckout = computed(
   () => pos.cartItems.length > 0 && !!pos.selectedCustomer && pos.grandTotal > 0
 );
@@ -249,6 +278,32 @@ async function handleCheckout() {
   font-weight: 700;
   min-width: 20px;
   text-align: center;
+}
+.cart__cust-balance {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 8px;
+  margin-left: auto;
+  margin-right: 8px;
+  letter-spacing: 0.02em;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+.cart__cust-balance--due {
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+.cart__cust-balance--advance {
+  background: rgba(16, 185, 129, 0.08);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+.cart__cust-balance--zero {
+  background: rgba(148, 163, 184, 0.08);
+  color: #64748b;
+  border: 1px solid rgba(148, 163, 184, 0.2);
 }
 .cart__trash {
   background: none;

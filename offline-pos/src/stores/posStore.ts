@@ -7,7 +7,7 @@ import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
 import { fetchItems, fetchItemByBarcode } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
-import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers } from '../db/posDB';
+import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers, cachePartyBalance, getCachedPartyBalance } from '../db/posDB';
 import call from '../lib/call';
 
 export interface POSItem {
@@ -132,6 +132,7 @@ export const usePOSStore = defineStore('pos', () => {
       ? JSON.parse(localStorage.getItem('pos_selected_customer')!)
       : null
   );
+  const selectedCustomerBalance = ref<number | null>(null);
   const cartDiscount = ref<number>(
     localStorage.getItem('pos_cart_discount')
       ? parseFloat(localStorage.getItem('pos_cart_discount')!)
@@ -185,10 +186,89 @@ export const usePOSStore = defineStore('pos', () => {
   watch(selectedCustomer, (newVal) => {
     if (newVal) {
       localStorage.setItem('pos_selected_customer', JSON.stringify(newVal));
+      fetchCustomerBalance(newVal.name);
     } else {
       localStorage.removeItem('pos_selected_customer');
+      selectedCustomerBalance.value = null;
     }
   });
+
+  async function fetchCustomerBalance(customerName: string) {
+    if (!session.value || !customerName) return;
+    const company = session.value.company;
+    const partyType = 'Customer';
+
+    if (network.isOnline) {
+      try {
+        const result = await call('frappe.client.get_list', {
+          doctype: 'Party Balance',
+          filters: { company, party: customerName, party_type: partyType },
+          fields: ['party_current_balance'],
+          limit_page_length: 1,
+        });
+        const balance = (result && result.length > 0) ? (parseFloat(result[0].party_current_balance) || 0) : 0;
+        
+        // Cache in IndexedDB
+        await cachePartyBalance({
+          id: `${company}-${partyType}-${customerName}`,
+          company,
+          party_type: partyType,
+          party: customerName,
+          party_current_balance: balance,
+        });
+
+        if (selectedCustomer.value?.name === customerName) {
+          selectedCustomerBalance.value = balance;
+        }
+      } catch (err) {
+        console.warn('[POSStore] Failed to fetch customer balance from server, falling back to IndexedDB:', err);
+        await loadCustomerBalanceFromOffline(company, partyType, customerName);
+      }
+    } else {
+      await loadCustomerBalanceFromOffline(company, partyType, customerName);
+    }
+  }
+
+  async function loadCustomerBalanceFromOffline(company: string, partyType: string, customerName: string) {
+    try {
+      const cached = await getCachedPartyBalance(company, partyType, customerName);
+      const balance = cached ? cached.party_current_balance : 0;
+      if (selectedCustomer.value?.name === customerName) {
+        selectedCustomerBalance.value = balance;
+      }
+    } catch (err) {
+      console.error('[POSStore] Failed to load cached customer balance:', err);
+      if (selectedCustomer.value?.name === customerName) {
+        selectedCustomerBalance.value = 0;
+      }
+    }
+  }
+
+  async function updateOfflineCustomerBalance(customerName: string, delta: number) {
+    if (!session.value || !customerName) return;
+    const company = session.value.company;
+    const partyType = 'Customer';
+    try {
+      const cached = await getCachedPartyBalance(company, partyType, customerName);
+      const oldBalance = cached ? cached.party_current_balance : 0;
+      const newBalance = oldBalance + delta;
+      
+      await cachePartyBalance({
+        id: `${company}-${partyType}-${customerName}`,
+        company,
+        party_type: partyType,
+        party: customerName,
+        party_current_balance: newBalance,
+      });
+
+      if (selectedCustomer.value?.name === customerName) {
+        selectedCustomerBalance.value = newBalance;
+      }
+      console.log(`[POSStore] Updated offline customer balance for ${customerName}: ${oldBalance} -> ${newBalance}`);
+    } catch (err) {
+      console.error('[POSStore] Failed to update offline customer balance:', err);
+    }
+  }
 
   watch(cartDiscount, (newVal) => {
     localStorage.setItem('pos_cart_discount', newVal.toString());
@@ -1889,6 +1969,10 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
+  if (selectedCustomer.value) {
+    fetchCustomerBalance(selectedCustomer.value.name);
+  }
+
   return {
     // Session
     session, isSessionLoading, initSession, clearSession,
@@ -1898,6 +1982,7 @@ export const usePOSStore = defineStore('pos', () => {
     // Customers
     customers, customerSearch, customersLoading,
     loadCustomers, selectCustomer, prefetchAllCustomers,
+    selectedCustomerBalance, fetchCustomerBalance, updateOfflineCustomerBalance,
     // Cart
     cartItems, selectedCustomer, cartDiscount, additionalDiscount, discountType,
     selectedItemIdx, warehouses, selectedCartItem,

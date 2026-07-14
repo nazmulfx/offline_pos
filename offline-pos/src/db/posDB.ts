@@ -4,7 +4,7 @@
  */
 
 const DB_NAME = 'offline_pos_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let _db: IDBDatabase | null = null;
 
@@ -64,6 +64,11 @@ export function openPOSDB(): Promise<IDBDatabase> {
           keyPath: 'id',
           autoIncrement: true,
         });
+      }
+
+      // Party Balance store
+      if (!db.objectStoreNames.contains('party_balance')) {
+        db.createObjectStore('party_balance', { keyPath: 'id' });
       }
     };
 
@@ -416,5 +421,32 @@ export async function getAllSerialBatchData(): Promise<any[]> {
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => reject(req.error);
   });
+}
+
+// ─── Party Balance ──────────────────────────────────────────────────────────
+
+export interface PartyBalanceRecord {
+  id: string; // `${company}-${partyType}-${party}`
+  company: string;
+  party_type: string;
+  party: string;
+  party_current_balance: number;
+}
+
+export async function cachePartyBalance(record: PartyBalanceRecord): Promise<void> {
+  return withStore<IDBValidKey>('party_balance', 'readwrite', (store) =>
+    store.put(record)
+  ).then(() => undefined);
+}
+
+export async function getCachedPartyBalance(
+  company: string,
+  partyType: string,
+  party: string
+): Promise<PartyBalanceRecord | null> {
+  const id = `${company}-${partyType}-${party}`;
+  return withStore<any>('party_balance', 'readonly', (store) => store.get(id))
+    .then((res) => res || null)
+    .catch(() => null);
 }
 

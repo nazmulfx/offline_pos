@@ -288,6 +288,9 @@ async function submitPayment() {
     });
 
     if (result.success) {
+      if (pos.selectedCustomer?.name && outstandingAmount.value > 0) {
+        await pos.updateOfflineCustomerBalance(pos.selectedCustomer.name, outstandingAmount.value);
+      }
       if (result.offline) {
         await sync.refreshPendingCount();
       }
