@@ -33,6 +33,28 @@ function today(): string {
   return `${year}-${month}-${day}`;
 }
 
+function uuidv4(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function generateOfflineId(posProfile: string): string {
+  const profileClean = (posProfile || 'DEFAULT').replace(/[^a-zA-Z0-9]/g, '');
+  const cookies = Object.fromEntries(
+    document.cookie.split('; ').filter(Boolean).map((part) => {
+      const [k, ...v] = part.split('=');
+      return [k, decodeURIComponent(v.join('='))];
+    })
+  );
+  const userClean = (cookies.user_id || 'Guest').replace(/[^a-zA-Z0-9]/g, '');
+  const timestamp = Date.now();
+  const uuid = uuidv4();
+  return `Offline-${profileClean}-${userClean}-${timestamp}-${uuid}`;
+}
+
 function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
   const {
     session,
@@ -98,6 +120,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     company: session.company,
     customer: customer.name,
     set_warehouse: session.warehouse,
+    custom_offline_id: generateOfflineId(session.pos_profile),
     currency: session.currency,
     selling_price_list: session.price_list,
     posting_date: today(),
@@ -242,6 +265,40 @@ export async function submitInvoice(payload: CreateInvoicePayload): Promise<{
       const errorText = messages.length > 0
         ? messages.join('\n')
         : err?.message || 'Failed to submit invoice';
+
+      // Check if it's a connection / network error to fallback to offline save
+      const isConnectionError =
+        err instanceof TypeError || // native fetch error like Failed to fetch
+        errorText.includes('Failed to fetch') ||
+        errorText.includes('NetworkError') ||
+        errorText.includes('network') ||
+        errorText.includes('timeout') ||
+        !err.status ||
+        err.status === 0 ||
+        err.status === 408 ||
+        err.status === 502 ||
+        err.status === 503 ||
+        err.status === 504;
+
+      if (isConnectionError) {
+        console.warn('[submitInvoice] Network/Server connection error detected. Falling back to offline save.', err);
+        try {
+          const localId = await saveDraftInvoice(doc);
+          await addToSyncQueue('submit_invoice', { invoice: doc, local_id: localId });
+          return {
+            success: true,
+            localId,
+            offline: true,
+            doc,
+          };
+        } catch (saveErr: any) {
+          return {
+            success: false,
+            error: 'Network connection failed, and failed to save offline: ' + (saveErr?.message || 'Unknown save error'),
+          };
+        }
+      }
+
       return {
         success: false,
         error: errorText,

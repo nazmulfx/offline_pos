@@ -30,6 +30,7 @@ export const useSyncStore = defineStore('sync', () => {
   const syncError = ref<string | null>(null);
   // Map of sync-queue item id → error message from the last sync attempt
   const failedItems = ref<Record<number, string>>({});
+  const lastSyncedInvoiceCount = ref<number>(0);
 
   async function refreshPendingCount() {
     pendingCount.value = await getSyncQueueCount();
@@ -87,144 +88,155 @@ export const useSyncStore = defineStore('sync', () => {
   }
 
   async function syncAll() {
-    if (isSyncing.value) return;
+    if (isSyncing.value) {
+      try {
+        const posStore = usePOSStore();
+        posStore.showAlert('Sync Status', 'Sync already started successfully.', 'info');
+      } catch (err) {
+        console.warn('[SyncStore] Failed to show sync already started alert:', err);
+      }
+      return;
+    }
     if (!isAuthenticated()) {
       console.warn('[SyncStore] syncAll() skipped — not authenticated.');
       return;
     }
 
-    const allItems = await getSyncQueue();
-    if (!allItems.length) {
-      pendingCount.value = 0;
-      return;
-    }
-
+    // Lock synchronously before any async operations to prevent race conditions
     isSyncing.value = true;
     syncError.value = null;
     failedItems.value = {};  // reset per-item errors
+    lastSyncedInvoiceCount.value = 0;
 
-    await refreshCSRFToken();
+    try {
+      const allItems = await getSyncQueue();
+      if (!allItems.length) {
+        pendingCount.value = 0;
+        return;
+      }
 
-    // ── STEP 1: Sync customers first ────────────────────────────
-    const customerItems = allItems.filter(i => i.action === 'save_customer');
-    const invoiceItems  = allItems.filter(i => i.action === 'submit_invoice');
-    const otherItems    = allItems.filter(i => i.action !== 'save_customer' && i.action !== 'submit_invoice');
+      await refreshCSRFToken();
 
-    const errors: string[] = [];
+      // ── STEP 1: Sync customers first ────────────────────────────
+      const customerItems = allItems.filter(i => i.action === 'save_customer');
+      const invoiceItems  = allItems.filter(i => i.action === 'submit_invoice');
+      const otherItems    = allItems.filter(i => i.action !== 'save_customer' && i.action !== 'submit_invoice');
 
-    for (const item of customerItems) {
-      try {
-        const realCustomer = await syncCustomerItem(item);
+      const errors: string[] = [];
 
-        // Relink any queued invoices that used this customer's temp name
-        if (item.payload?.temp_name && realCustomer?.name) {
-          const tempName = item.payload.temp_name;
-          const realName = realCustomer.name;
+      for (const item of customerItems) {
+        try {
+          const realCustomer = await syncCustomerItem(item);
 
-          // ── Primary fix: update in-memory invoiceItems RIGHT NOW ──────────
-          // This ensures Step 2 always has the real customer name regardless of
-          // any IndexedDB read lag after updateCustomerNameInQueue commits.
-          for (const inv of invoiceItems) {
-            if (inv.payload?.invoice?.customer === tempName) {
-              inv.payload.invoice.customer = realName;
-              console.log(`[SyncStore] In-memory patch: invoice id=${inv.id} customer ${tempName} → ${realName}`);
+          // Relink any queued invoices that used this customer's temp name
+          if (item.payload?.temp_name && realCustomer?.name) {
+            const tempName = item.payload.temp_name;
+            const realName = realCustomer.name;
+
+            // ── Primary fix: update in-memory invoiceItems RIGHT NOW ──────────
+            // This ensures Step 2 always has the real customer name regardless of
+            // any IndexedDB read lag after updateCustomerNameInQueue commits.
+            for (const inv of invoiceItems) {
+              if (inv.payload?.invoice?.customer === tempName) {
+                inv.payload.invoice.customer = realName;
+                console.log(`[SyncStore] In-memory patch: invoice id=${inv.id} customer ${tempName} → ${realName}`);
+              }
             }
+
+            // ── Also persist to IndexedDB for durability ───────────────────────
+            // (Fixed: now only resolves on tx.oncomplete, not req.onsuccess)
+            await updateCustomerNameInQueue(tempName, realName);
+            await removeOfflineCustomer(tempName);
+            console.log('[SyncStore] Customer synced:', tempName, '→', realName);
           }
 
-          // ── Also persist to IndexedDB for durability ───────────────────────
-          // (Fixed: now only resolves on tx.oncomplete, not req.onsuccess)
-          await updateCustomerNameInQueue(tempName, realName);
-          await removeOfflineCustomer(tempName);
-          console.log('[SyncStore] Customer synced:', tempName, '→', realName);
-        }
-
-        await removeSyncItem(item.id);
-      } catch (err: any) {
-        const msg = extractErrorMessage(err);
-        failedItems.value[item.id] = msg;
-        errors.push('Customer: ' + msg);
-        console.error('[SyncStore] Customer sync failed id=' + item.id, err);
-        if (isAuthError(err)) {
-          syncError.value = 'Session expired. Please log in again to sync.';
-          isSyncing.value = false;
-          await refreshPendingCount();
-          auth.clearLocalCookies();
-          router.push({
-            name: 'Login',
-            query: {
-              route: router.currentRoute.value.path,
-              message: 'Session expired. Please log in again to sync.'
-            }
-          });
-          return;
+          await removeSyncItem(item.id);
+        } catch (err: any) {
+          const msg = extractErrorMessage(err);
+          failedItems.value[item.id] = msg;
+          errors.push('Customer: ' + msg);
+          console.error('[SyncStore] Customer sync failed id=' + item.id, err);
+          if (isAuthError(err)) {
+            syncError.value = 'Session expired. Please log in again to sync.';
+            auth.clearLocalCookies();
+            router.push({
+              name: 'Login',
+              query: {
+                route: router.currentRoute.value.path,
+                message: 'Session expired. Please log in again to sync.'
+              }
+            });
+            return;
+          }
         }
       }
-    }
 
-    // ── STEP 2: Sync invoices ────────────────────────────────────
-    // Use the in-memory invoiceItems (already patched above with real customer names).
-    // No need to re-fetch from IndexedDB — in-memory state is always up-to-date.
-    for (const item of invoiceItems) {
-      // Safety guard: skip invoices whose customer is still an offline temp name.
-      // This only happens when the customer sync itself failed — retry next cycle.
-      const invoiceCustomer = item.payload?.invoice?.customer || '';
-      if (invoiceCustomer.startsWith('OFFLINE-')) {
-        const blockedMsg = `Waiting for customer "${invoiceCustomer}" to sync first before this invoice can be submitted.`;
-        console.warn(`[SyncStore] Skipping invoice id=${item.id} — customer not yet synced: ${invoiceCustomer}`);
-        errors.push(`Invoice id=${item.id} skipped — customer not yet synced.`);
-        failedItems.value[item.id] = blockedMsg;
-        continue;
+      // ── STEP 2: Sync invoices ────────────────────────────────────
+      // Use the in-memory invoiceItems (already patched above with real customer names).
+      // No need to re-fetch from IndexedDB — in-memory state is always up-to-date.
+      for (const item of invoiceItems) {
+        // Safety guard: skip invoices whose customer is still an offline temp name.
+        // This only happens when the customer sync itself failed — retry next cycle.
+        const invoiceCustomer = item.payload?.invoice?.customer || '';
+        if (invoiceCustomer.startsWith('OFFLINE-')) {
+          const blockedMsg = `Waiting for customer "${invoiceCustomer}" to sync first before this invoice can be submitted.`;
+          console.warn(`[SyncStore] Skipping invoice id=${item.id} — customer not yet synced: ${invoiceCustomer}`);
+          errors.push(`Invoice id=${item.id} skipped — customer not yet synced.`);
+          failedItems.value[item.id] = blockedMsg;
+          continue;
+        }
+
+        try {
+          await syncInvoiceItem(item);
+          await removeSyncItem(item.id);
+          lastSyncedInvoiceCount.value++;
+        } catch (err: any) {
+          const msg = extractErrorMessage(err);
+          failedItems.value[item.id] = msg;
+          errors.push('Invoice: ' + msg);
+          console.error('[SyncStore] Invoice sync failed id=' + item.id, err);
+          if (isAuthError(err)) {
+            syncError.value = 'Session expired. Please log in again to sync.';
+            auth.clearLocalCookies();
+            router.push({
+              name: 'Login',
+              query: {
+                route: router.currentRoute.value.path,
+                message: 'Session expired. Please log in again to sync.'
+              }
+            });
+            break;
+          }
+          // Continue other invoices even if one fails
+        }
       }
 
+      // ── STEP 3: Other actions ────────────────────────────────────
+      for (const item of otherItems) {
+        try {
+          await call('frappe.client.insert', { doc: item.payload }, { skipAuthRedirect: true });
+          await removeSyncItem(item.id);
+        } catch (err: any) {
+          errors.push(extractErrorMessage(err));
+        }
+      }
+
+      if (errors.length > 0) syncError.value = errors.join('\n');
+
+      const remaining = await getSyncQueueCount();
+      console.log(`[SyncStore] Sync done — pending: ${remaining}, errors: ${errors.length}`);
+
+      // Refresh serial/batch data from server after sync finishes
+      const posStore = usePOSStore();
       try {
-        await syncInvoiceItem(item);
-        await removeSyncItem(item.id);
-      } catch (err: any) {
-        const msg = extractErrorMessage(err);
-        failedItems.value[item.id] = msg;
-        errors.push('Invoice: ' + msg);
-        console.error('[SyncStore] Invoice sync failed id=' + item.id, err);
-        if (isAuthError(err)) {
-          syncError.value = 'Session expired. Please log in again to sync.';
-          auth.clearLocalCookies();
-          router.push({
-            name: 'Login',
-            query: {
-              route: router.currentRoute.value.path,
-              message: 'Session expired. Please log in again to sync.'
-            }
-          });
-          break;
-        }
-        // Continue other invoices even if one fails
+        await posStore.refreshSerialBatchDataFromServer();
+      } catch (e) {
+        console.warn('[SyncStore] Failed to refresh serial/batch data after sync:', e);
       }
-    }
-
-    // ── STEP 3: Other actions ────────────────────────────────────
-    for (const item of otherItems) {
-      try {
-        await call('frappe.client.insert', { doc: item.payload }, { skipAuthRedirect: true });
-        await removeSyncItem(item.id);
-      } catch (err: any) {
-        errors.push(extractErrorMessage(err));
-      }
-    }
-
-    isSyncing.value = false;
-    lastSyncAt.value = new Date();
-    await refreshPendingCount();
-
-    if (errors.length > 0) syncError.value = errors.join('\n');
-
-    const remaining = await getSyncQueueCount();
-    console.log(`[SyncStore] Sync done — pending: ${remaining}, errors: ${errors.length}`);
-
-    // Refresh serial/batch data from server after sync finishes
-    const posStore = usePOSStore();
-    try {
-      await posStore.refreshSerialBatchDataFromServer();
-    } catch (e) {
-      console.warn('[SyncStore] Failed to refresh serial/batch data after sync:', e);
+    } finally {
+      isSyncing.value = false;
+      lastSyncAt.value = new Date();
+      await refreshPendingCount();
     }
   }
 
@@ -242,14 +254,75 @@ export const useSyncStore = defineStore('sync', () => {
       invoice.update_stock = 1;
     }
 
-    const insertedDoc = await call(
-      'frappe.client.insert',
-      { doc: invoice },
-      { skipAuthRedirect: true }
-    );
-    if (!insertedDoc?.name) throw new Error('Insert returned no document');
+    let docToSubmit = null;
+    if (invoice.name) {
+      // Already inserted! Get the latest doc from the server to submit it
+      try {
+        docToSubmit = await call(
+          'frappe.client.get',
+          { doctype: invoice.doctype || 'POS Invoice', name: invoice.name },
+          { skipAuthRedirect: true }
+        );
+      } catch (err: any) {
+        // If not found, it might have been deleted or not actually inserted
+        if (err.status === 404) {
+          docToSubmit = null;
+        } else {
+          throw err;
+        }
+      }
+    }
 
-    await call('frappe.client.submit', { doc: insertedDoc }, { skipAuthRedirect: true });
+    if (!docToSubmit && invoice.custom_offline_id) {
+      try {
+        const existing = await call(
+          'frappe.client.get_list',
+          {
+            doctype: invoice.doctype || 'POS Invoice',
+            filters: { custom_offline_id: invoice.custom_offline_id },
+            fields: ['name', 'docstatus'],
+            limit_page_length: 1
+          },
+          { skipAuthRedirect: true }
+        );
+        if (existing && existing.length > 0) {
+          const name = existing[0].name;
+          console.log(`[SyncStore] Found existing invoice on server with custom_offline_id ${invoice.custom_offline_id}: ${name}`);
+          invoice.name = name;
+          const { updateSyncItemInvoiceName } = await import('../db/posDB');
+          await updateSyncItemInvoiceName(item.id, name);
+
+          docToSubmit = await call(
+            'frappe.client.get',
+            { doctype: invoice.doctype || 'POS Invoice', name },
+            { skipAuthRedirect: true }
+          );
+        }
+      } catch (err) {
+        console.warn('[SyncStore] Failed to query existing invoice by custom_offline_id:', err);
+      }
+    }
+
+    if (!docToSubmit) {
+      const insertedDoc = await call(
+        'frappe.client.insert',
+        { doc: invoice },
+        { skipAuthRedirect: true }
+      );
+      if (!insertedDoc?.name) throw new Error('Insert returned no document');
+      docToSubmit = insertedDoc;
+
+      // Update the queue item's invoice name so that if submit fails next, we don't re-insert it
+      invoice.name = insertedDoc.name;
+      const { updateSyncItemInvoiceName } = await import('../db/posDB');
+      await updateSyncItemInvoiceName(item.id, insertedDoc.name);
+    }
+
+    if (docToSubmit.docstatus === 1) {
+      console.log(`[SyncStore] Invoice ${docToSubmit.name} is already submitted on server.`);
+    } else {
+      await call('frappe.client.submit', { doc: docToSubmit }, { skipAuthRedirect: true });
+    }
 
     if (local_id) await markInvoiceSynced(local_id);
   }
@@ -294,5 +367,6 @@ export const useSyncStore = defineStore('sync', () => {
     syncAll,
     refreshPendingCount,
     refreshCSRFToken,
+    lastSyncedInvoiceCount,
   };
 });

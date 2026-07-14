@@ -50,8 +50,8 @@ const lastSyncCount = ref(0);
 watch(
   () => sync.isSyncing,
   (syncing, wasSyncing) => {
-    if (wasSyncing && !syncing && network.isOnline && sync.pendingCount === 0) {
-      lastSyncCount.value = 1;
+    if (wasSyncing && !syncing && network.isOnline && sync.lastSyncedInvoiceCount > 0) {
+      lastSyncCount.value = sync.lastSyncedInvoiceCount;
       showSyncSuccess.value = true;
       setTimeout(() => { showSyncSuccess.value = false; }, 4000);
     }

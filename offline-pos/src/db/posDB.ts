@@ -359,6 +359,25 @@ export async function updateCustomerNameInQueue(
   });
 }
 
+export async function updateSyncItemInvoiceName(id: number, serverInvoiceName: string): Promise<void> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('sync_queue', 'readwrite');
+    const store = tx.objectStore('sync_queue');
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const item = getReq.result;
+      if (item && item.payload && item.payload.invoice) {
+        item.payload.invoice.name = serverInvoiceName;
+        store.put(item);
+      }
+    };
+    getReq.onerror = () => reject(getReq.error);
+    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => resolve();
+  });
+}
+
 /**
  * Remove an offline customer (temp name) from the cache after sync.
  * The real customer will be fetched on next load.

@@ -46,12 +46,12 @@
           {{ network.isOnline ? 'Online' : 'Offline' }}
         </div>
 
-        <!-- Sync to Server -->
+        <!-- Sync with Server -->
         <button
           v-if="network.isOnline"
           class="pos-topbar__refresh-btn"
           @click="manualDataRefresh"
-          :disabled="isRefreshingData"
+          :disabled="isRefreshingData || sync.isSyncing"
           title="Sync offline transactions and refresh data from server"
         >
           <svg
@@ -61,11 +61,11 @@
             stroke-width="2.5"
             width="14"
             height="14"
-            :class="{ rotating: isRefreshingData }"
+            :class="{ rotating: isRefreshingData || sync.isSyncing }"
           >
             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
           </svg>
-          {{ isRefreshingData ? 'Syncing...' : 'Sync to Server' }}
+          {{ (isRefreshingData || sync.isSyncing) ? 'Syncing...' : 'Sync with Server' }}
         </button>
 
         <!-- Theme Toggle -->
@@ -219,7 +219,7 @@ const currentTime = ref('');
 const isRefreshingData = ref(false);
 
 async function manualDataRefresh() {
-  if (isRefreshingData.value || !network.isOnline) return;
+  if (isRefreshingData.value || sync.isSyncing || !network.isOnline) return;
   isRefreshingData.value = true;
   try {
     pos.showAlert('Syncing Data', 'Syncing offline transactions and updating local catalog from the server...', 'info');
@@ -444,14 +444,27 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         }
 
         if (!success) {
+          if (doc) {
+            console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
+            const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+            const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+            printInvoiceOffline(doc, pfData, null, true);
+          } else {
+            const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+            printUrlViaIframe(fallbackUrl);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch and inject printview for iframe print, falling back to offline printing:', err);
+        if (doc) {
+          const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+          const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+          printInvoiceOffline(doc, pfData, null, true);
+        } else {
+          const doctype = pos.session?.invoice_type || 'POS Invoice';
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
           printUrlViaIframe(fallbackUrl);
         }
-      } catch (err) {
-        console.warn('Failed to fetch and inject printview for iframe print:', err);
-        const doctype = pos.session?.invoice_type || 'POS Invoice';
-        const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
-        printUrlViaIframe(fallbackUrl);
       }
     } else if (doc) {
       const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
@@ -512,21 +525,34 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
         }
 
         if (!success) {
+          if (doc) {
+            console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
+            const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+            const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+            printInvoiceOffline(doc, pfData, preOpenedWindow, false);
+          } else {
+            const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+            if (preOpenedWindow) {
+              preOpenedWindow.location.href = fallbackUrl;
+            } else {
+              window.open(fallbackUrl, '_blank');
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch and inject printview, falling back to offline printing:', err);
+        if (doc) {
+          const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
+          const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
+          printInvoiceOffline(doc, pfData, preOpenedWindow, false);
+        } else {
+          const doctype = pos.session?.invoice_type || 'POS Invoice';
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
           if (preOpenedWindow) {
             preOpenedWindow.location.href = fallbackUrl;
           } else {
             window.open(fallbackUrl, '_blank');
           }
-        }
-      } catch (err) {
-        console.warn('Failed to fetch and inject printview, falling back to direct redirect:', err);
-        const doctype = pos.session?.invoice_type || 'POS Invoice';
-        const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
-        if (preOpenedWindow) {
-          preOpenedWindow.location.href = fallbackUrl;
-        } else {
-          window.open(fallbackUrl, '_blank');
         }
       }
     } else if (doc) {
