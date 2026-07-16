@@ -7,7 +7,7 @@ import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
 import { fetchItems, fetchItemByBarcode } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
-import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers } from '../db/posDB';
+import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers, cachePartyBalance, getCachedPartyBalance, saveHoldInvoice, updateHoldInvoice, getHoldInvoices, deleteHoldInvoice } from '../db/posDB';
 import call from '../lib/call';
 
 export interface POSItem {
@@ -132,6 +132,7 @@ export const usePOSStore = defineStore('pos', () => {
       ? JSON.parse(localStorage.getItem('pos_selected_customer')!)
       : null
   );
+  const selectedCustomerBalance = ref<number | null>(null);
   const cartDiscount = ref<number>(
     localStorage.getItem('pos_cart_discount')
       ? parseFloat(localStorage.getItem('pos_cart_discount')!)
@@ -155,6 +156,10 @@ export const usePOSStore = defineStore('pos', () => {
     batches: Array<{ batch_no: string; qty: number; expiry_date?: string }>;
   }>>({});
   const pickStrategy = ref<string>('FIFO');
+
+  // ─── Held Invoices State ──────────────────────────────────────────────────
+  const heldInvoices = ref<any[]>([]);
+  const currentDraftId = ref<number | null>(null);
 
   const warehouses = ref<string[]>([]);
 
@@ -185,10 +190,90 @@ export const usePOSStore = defineStore('pos', () => {
   watch(selectedCustomer, (newVal) => {
     if (newVal) {
       localStorage.setItem('pos_selected_customer', JSON.stringify(newVal));
+      fetchCustomerBalance(newVal.name);
     } else {
       localStorage.removeItem('pos_selected_customer');
+      selectedCustomerBalance.value = null;
     }
   });
+
+  async function fetchCustomerBalance(customerName: string) {
+    if (!session.value || !customerName) return;
+    const company = session.value.company;
+    const partyType = 'Customer';
+
+    if (network.isOnline) {
+      try {
+        console.log(`[POSStore] Fetching Party Balance (company: "${company}", party: "${customerName}") from server...`);
+        const result = await call('frappe.client.get_list', {
+          doctype: 'Party Balance',
+          filters: { company, party: customerName, party_type: partyType },
+          fields: ['party_current_balance'],
+          limit_page_length: 1,
+        });
+        const balance = (result && result.length > 0) ? (parseFloat(result[0].party_current_balance) || 0) : 0;
+        
+        // Cache in IndexedDB
+        await cachePartyBalance({
+          id: `${company}-${partyType}-${customerName}`,
+          company,
+          party_type: partyType,
+          party: customerName,
+          party_current_balance: balance,
+        });
+
+        if (selectedCustomer.value?.name === customerName) {
+          selectedCustomerBalance.value = balance;
+        }
+      } catch (err) {
+        console.warn('[POSStore] Failed to fetch customer balance from server, falling back to IndexedDB:', err);
+        await loadCustomerBalanceFromOffline(company, partyType, customerName);
+      }
+    } else {
+      await loadCustomerBalanceFromOffline(company, partyType, customerName);
+    }
+  }
+
+  async function loadCustomerBalanceFromOffline(company: string, partyType: string, customerName: string) {
+    try {
+      const cached = await getCachedPartyBalance(company, partyType, customerName);
+      const balance = cached ? cached.party_current_balance : 0;
+      if (selectedCustomer.value?.name === customerName) {
+        selectedCustomerBalance.value = balance;
+      }
+    } catch (err) {
+      console.error('[POSStore] Failed to load cached customer balance:', err);
+      if (selectedCustomer.value?.name === customerName) {
+        selectedCustomerBalance.value = 0;
+      }
+    }
+  }
+
+  async function updateOfflineCustomerBalance(customerName: string, delta: number) {
+    if (!session.value || !customerName) return;
+    const company = session.value.company;
+    const partyType = 'Customer';
+    try {
+      const cached = await getCachedPartyBalance(company, partyType, customerName);
+      const oldBalance = cached ? cached.party_current_balance : 0;
+      const newBalance = oldBalance + delta;
+      
+      await cachePartyBalance({
+        id: `${company}-${partyType}-${customerName}`,
+        company,
+        party_type: partyType,
+        party: customerName,
+        party_current_balance: newBalance,
+      });
+
+      if (selectedCustomer.value?.name === customerName) {
+        selectedCustomerBalance.value = newBalance;
+      }
+      console.log(`[POSStore] Updated offline customer balance for ${customerName}: ${oldBalance} -> ${newBalance}`);
+    } catch (err) {
+      console.error('[POSStore] Failed to update offline customer balance:', err);
+    }
+  }
 
   watch(cartDiscount, (newVal) => {
     localStorage.setItem('pos_cart_discount', newVal.toString());
@@ -241,6 +326,7 @@ export const usePOSStore = defineStore('pos', () => {
           const itemCodes = result.map((i: any) => i.item_code);
           const priceList = session.value.price_list;
 
+          console.log(`[POSStore] Fetching Price List ("${priceList}") details and UOM conversion details for ${result.length} items from server...`);
           const [uomDetails, priceDetails] = await Promise.all([
             call('frappe.client.get_list', {
               doctype: 'UOM Conversion Detail',
@@ -368,6 +454,7 @@ export const usePOSStore = defineStore('pos', () => {
       }
       
       if (!customerObj && network.isOnline) {
+        console.log(`[POSStore] Fetching Customer "${customerName}" from server...`);
         const result = await call('frappe.client.get', {
           doctype: 'Customer',
           name: customerName,
@@ -832,6 +919,7 @@ export const usePOSStore = defineStore('pos', () => {
     cartDiscount.value = 0;
     additionalDiscount.value = 0;
     selectedItemIdx.value = null;
+    currentDraftId.value = null;
   }
 
   // ─── Computed Totals ─────────────────────────────────────────────────────
@@ -1004,6 +1092,7 @@ export const usePOSStore = defineStore('pos', () => {
     const warehouse = session.value?.warehouse;
     if (!warehouse) return;
     try {
+      console.log(`[POSStore] Fetching Serial and Batch stock data for warehouse "${warehouse}" from server...`);
       const sbRes = await call('offline_pos.api.get_serial_batch_data', {
         warehouse: warehouse
       });
@@ -1023,6 +1112,7 @@ export const usePOSStore = defineStore('pos', () => {
     const warehouse = session.value?.warehouse;
     if (!warehouse) return;
     try {
+      console.log(`[POSStore] Fetching Serial and Batch stock data for item "${itemCode}" in warehouse "${warehouse}" from server...`);
       const sbRes = await call('offline_pos.api.get_serial_batch_data', {
         warehouse: warehouse,
         item_code: itemCode
@@ -1048,6 +1138,7 @@ export const usePOSStore = defineStore('pos', () => {
     let defaultCustomerName: string | null = null;
     try {
       if (network.isOnline) {
+        console.log(`[POSStore] Fetching POS Settings (invoice_type, custom_default_customer) from server...`);
         const [invType, defCust] = await Promise.all([
           call('frappe.client.get_single_value', {
             doctype: 'POS Settings',
@@ -1076,6 +1167,7 @@ export const usePOSStore = defineStore('pos', () => {
     let fullOpeningEntry = openingEntry;
     if (!openingEntry.balance_details) {
       try {
+        console.log(`[POSStore] Fetching POS Opening Entry "${openingEntry.name}" from server...`);
         fullOpeningEntry = await call('frappe.client.get', {
           doctype: 'POS Opening Entry',
           name: openingEntry.name,
@@ -1099,6 +1191,7 @@ export const usePOSStore = defineStore('pos', () => {
     let taxesAndChargesData: any[] = [];
     if (profileData.taxes_and_charges) {
       try {
+        console.log(`[POSStore] Fetching Sales Taxes and Charges Template "${profileData.taxes_and_charges}" from server...`);
         const templateDoc = await call('frappe.client.get', {
           doctype: 'Sales Taxes and Charges Template',
           name: profileData.taxes_and_charges,
@@ -1146,6 +1239,7 @@ export const usePOSStore = defineStore('pos', () => {
       let loaded = false;
       if (network.isOnline) {
         try {
+          console.log(`[POSStore] Fetching Warehouse list from server...`);
           const whList = await call('frappe.client.get_list', {
             doctype: 'Warehouse',
             fields: ['name'],
@@ -1209,6 +1303,7 @@ export const usePOSStore = defineStore('pos', () => {
           const itemCodes = result.map((i: any) => i.item_code);
           const priceList = session.value.price_list;
           
+          console.log(`[POSStore] Prefetching UOM Conversion Detail and Item Price details for "${priceList}" price list from server...`);
           const [uomDetails, priceDetails] = await Promise.all([
             call('frappe.client.get_list', {
               doctype: 'UOM Conversion Detail',
@@ -1305,6 +1400,7 @@ export const usePOSStore = defineStore('pos', () => {
           filters.customer_group = ['in', customerGroups];
         }
         
+        console.log(`[POSStore] Prefetching Customers (start: ${start}, length: ${batchSize}) from server...`);
         const result = await call('frappe.client.get_list', {
           doctype: 'Customer',
           filters,
@@ -1361,6 +1457,7 @@ export const usePOSStore = defineStore('pos', () => {
       // 2. If online, fetch from ERPNext
       if (network.isOnline) {
         try {
+          console.log(`[POSStore] Fetching Item "${itemCode}" details and Item Price records (Price List: "${priceList}") from server...`);
           const itemDoc = await call('frappe.client.get', {
             doctype: 'Item',
             name: itemCode,
@@ -1889,6 +1986,66 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
+  if (selectedCustomer.value) {
+    fetchCustomerBalance(selectedCustomer.value.name);
+  }
+
+  // ─── Held Invoices Actions ────────────────────────────────────────────────
+  async function loadHeldInvoices() {
+    heldInvoices.value = await getHoldInvoices();
+  }
+
+  async function holdCurrentCart() {
+    if (cartItems.value.length === 0) return;
+
+    const holdData = JSON.parse(JSON.stringify({
+      customer: selectedCustomer.value,
+      cartItems: cartItems.value,
+      cartDiscount: cartDiscount.value,
+      additionalDiscount: additionalDiscount.value,
+      discountType: discountType.value,
+      created_at: new Date().toISOString(),
+      grand_total: roundedTotal.value,
+    }));
+
+    if (currentDraftId.value !== null) {
+      await updateHoldInvoice(currentDraftId.value, holdData);
+    } else {
+      await saveHoldInvoice(holdData);
+    }
+
+    clearCart();
+    await loadHeldInvoices();
+  }
+
+  async function resumeHeldInvoice(localId: number) {
+    const list = await getHoldInvoices();
+    const draft = list.find((d: any) => d.local_id === localId);
+    if (!draft) throw new Error('Draft not found.');
+
+    // Restore state
+    cartItems.value = draft.cartItems || [];
+    selectedCustomer.value = draft.customer || null;
+    cartDiscount.value = draft.cartDiscount || 0;
+    additionalDiscount.value = draft.additionalDiscount || 0;
+    discountType.value = draft.discountType || 'percent';
+    currentDraftId.value = localId;
+
+    if (selectedCustomer.value) {
+      await fetchCustomerBalance(selectedCustomer.value.name);
+    }
+
+    await loadHeldInvoices();
+  }
+
+  async function discardHeldInvoice(localId: number) {
+    await deleteHoldInvoice(localId);
+    if (currentDraftId.value === localId) {
+      currentDraftId.value = null;
+    }
+    await loadHeldInvoices();
+  }
+
   return {
     // Session
     session, isSessionLoading, initSession, clearSession,
@@ -1898,6 +2055,7 @@ export const usePOSStore = defineStore('pos', () => {
     // Customers
     customers, customerSearch, customersLoading,
     loadCustomers, selectCustomer, prefetchAllCustomers,
+    selectedCustomerBalance, fetchCustomerBalance, updateOfflineCustomerBalance,
     // Cart
     cartItems, selectedCustomer, cartDiscount, additionalDiscount, discountType,
     selectedItemIdx, warehouses, selectedCartItem,
@@ -1910,5 +2068,7 @@ export const usePOSStore = defineStore('pos', () => {
     activeAlert, showAlert, closeAlert,
     // Totals
     subtotal, totalDiscount, grandTotal, roundedTotal, roundingAdjustment, cartCount, taxes, totalTaxes,
+    // Held Invoices
+    heldInvoices, currentDraftId, loadHeldInvoices, holdCurrentCart, resumeHeldInvoice, discardHeldInvoice,
   };
 });

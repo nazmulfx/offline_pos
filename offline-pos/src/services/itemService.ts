@@ -27,6 +27,7 @@ export async function fetchItems(opts: FetchItemsOptions): Promise<any[]> {
 
   if (isOnline) {
     try {
+      console.log(`[ItemService] Fetching items from server (start: ${start}, group: "${group || 'All Item Groups'}", search: "${search}")...`);
       const result = await call(
         'erpnext.selling.page.point_of_sale.point_of_sale.get_items',
         {
@@ -61,6 +62,7 @@ export async function fetchItemByBarcode(
 ): Promise<any | null> {
   if (isOnline) {
     try {
+      console.log(`[ItemService] Fetching item by barcode "${barcode}" from server...`);
       const result = await call(
         'erpnext.selling.page.point_of_sale.point_of_sale.get_items',
         {

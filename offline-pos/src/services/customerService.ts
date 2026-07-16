@@ -26,6 +26,7 @@ export async function fetchCustomers(opts: FetchCustomersOptions): Promise<any[]
 
   if (isOnline) {
     try {
+      console.log(`[CustomerService] Fetching customer list matching "${search}" from server...`);
       const filters: Record<string, any> = { disabled: 0 };
       if (customerGroups.length) {
         filters.customer_group = ['in', customerGroups];

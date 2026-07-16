@@ -15,6 +15,9 @@
           <span class="cart__title">Cart</span>
           <span v-if="pos.cartCount > 0" class="cart__badge">{{ pos.cartCount }}</span>
         </div>
+        <div v-if="pos.selectedCustomer && pos.selectedCustomerBalance !== null" class="cart__cust-balance" :class="customerBalanceClass">
+          {{ customerBalanceInfo }}
+        </div>
         <button v-if="pos.cartItems.length > 0" class="cart__trash" @click="showClearConfirm = true" title="Clear cart">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
             <polyline points="3 6 5 6 21 6"/>
@@ -131,6 +134,17 @@
 
     <!-- ── Pay button ──────────────────────────── -->
     <div class="cart__foot">
+      <div class="cart__actions-row" v-if="pos.cartItems.length > 0">
+        <button class="cart__hold-btn" @click="handleHoldCart">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <line x1="9" y1="9" x2="15" y2="9"/>
+            <line x1="9" y1="13" x2="15" y2="13"/>
+            <line x1="9" y1="17" x2="13" y2="17"/>
+          </svg>
+          {{ pos.currentDraftId ? 'Update Hold' : 'Hold Cart' }}
+        </button>
+      </div>
       <button class="cart__pay" :disabled="!canCheckout" @click="handleCheckout">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16">
           <polyline points="20 6 9 17 4 12"/>
@@ -179,6 +193,32 @@ const currencySymbol = computed(() => {
   return getCurrencySymbol(pos.session?.currency);
 });
 
+const customerBalanceInfo = computed(() => {
+  if (pos.selectedCustomerBalance === null) return '';
+  const bal = pos.selectedCustomerBalance;
+  const absBal = Math.abs(bal);
+  const formatted = formatCurrency(absBal, pos.session?.currency);
+  if (bal > 0) {
+    return `Due: ${formatted}`;
+  } else if (bal < 0) {
+    return `Advance: ${formatted}`;
+  } else {
+    return `Due: ${formatted}`;
+  }
+});
+
+const customerBalanceClass = computed(() => {
+  if (pos.selectedCustomerBalance === null) return '';
+  const bal = pos.selectedCustomerBalance;
+  if (bal > 0) {
+    return 'cart__cust-balance--due';
+  } else if (bal < 0) {
+    return 'cart__cust-balance--advance';
+  } else {
+    return 'cart__cust-balance--zero';
+  }
+});
+
 const canCheckout = computed(
   () => pos.cartItems.length > 0 && !!pos.selectedCustomer && pos.grandTotal > 0
 );
@@ -190,6 +230,21 @@ function fmt(v: number) {
 function triggerClearCart() {
   pos.clearCart();
   showClearConfirm.value = false;
+}
+
+async function handleHoldCart() {
+  if (pos.cartItems.length === 0) return;
+  try {
+    const isUpdate = !!pos.currentDraftId;
+    await pos.holdCurrentCart();
+    pos.showAlert(
+      isUpdate ? 'Draft Updated' : 'Cart Held',
+      isUpdate ? 'The draft invoice has been successfully updated.' : 'The current cart has been saved as a draft invoice.',
+      'success'
+    );
+  } catch (err: any) {
+    pos.showAlert('Error', 'Failed to hold cart: ' + err.message, 'error');
+  }
 }
 
 async function handleCheckout() {
@@ -249,6 +304,32 @@ async function handleCheckout() {
   font-weight: 700;
   min-width: 20px;
   text-align: center;
+}
+.cart__cust-balance {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 8px;
+  margin-left: auto;
+  margin-right: 8px;
+  letter-spacing: 0.02em;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+.cart__cust-balance--due {
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+.cart__cust-balance--advance {
+  background: rgba(16, 185, 129, 0.08);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+.cart__cust-balance--zero {
+  background: rgba(148, 163, 184, 0.08);
+  color: #64748b;
+  border: 1px solid rgba(148, 163, 184, 0.2);
 }
 .cart__trash {
   background: none;
@@ -353,6 +434,31 @@ async function handleCheckout() {
   padding: 10px 12px 12px;
   background: var(--pos-surface);
   flex-shrink: 0;
+}
+.cart__actions-row {
+  margin-bottom: 8px;
+  width: 100%;
+}
+.cart__hold-btn {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--pos-border);
+  background: var(--pos-surface-hover, rgba(0, 0, 0, 0.02));
+  color: var(--pos-text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.12s;
+  font-family: inherit;
+}
+.cart__hold-btn:hover {
+  background: var(--pos-border);
+  border-color: var(--pos-text-muted);
 }
 .cart__pay {
   width: 100%;

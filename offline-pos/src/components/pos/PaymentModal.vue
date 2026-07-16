@@ -288,20 +288,36 @@ async function submitPayment() {
     });
 
     if (result.success) {
+      if (pos.selectedCustomer?.name && outstandingAmount.value > 0) {
+        await pos.updateOfflineCustomerBalance(pos.selectedCustomer.name, outstandingAmount.value);
+      }
       if (result.offline) {
         await sync.refreshPendingCount();
       }
       await pos.decrementStock(pos.cartItems);
+      if (pos.currentDraftId !== null) {
+        await pos.discardHeldInvoice(pos.currentDraftId);
+      }
       pos.clearCart();
       emit('success', result.invoiceName || `OFFLINE-${result.localId}`, !!result.offline, result.doc, printWindow);
       close();
     } else {
       if (printWindow) printWindow.close();
-      pos.showAlert('Payment Error', result.error || 'Failed to submit invoice');
+      const errText = result.error || 'Failed to submit invoice';
+      if (errText.includes('CSRFTokenError') || errText.includes('Invalid Request')) {
+        pos.showAlert('CSRF Token Error', 'Your security session has expired. Please reload the page to post data to the online server.', 'error');
+      } else {
+        pos.showAlert('Payment Error', errText);
+      }
     }
   } catch (err: any) {
     if (printWindow) printWindow.close();
-    pos.showAlert('Payment Error', err?.message || 'Failed to submit invoice');
+    const errMsg = err?.message || err?.exc || '';
+    if (err?.exc_type === 'CSRFTokenError' || errMsg.includes('CSRFTokenError') || errMsg.includes('Invalid Request')) {
+      pos.showAlert('CSRF Token Error', 'Your security session has expired. Please reload the page to post data to the online server.', 'error');
+    } else {
+      pos.showAlert('Payment Error', err?.message || 'Failed to submit invoice');
+    }
   } finally {
     isSubmitting.value = false;
   }
