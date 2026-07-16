@@ -134,6 +134,17 @@
 
     <!-- ── Pay button ──────────────────────────── -->
     <div class="cart__foot">
+      <div class="cart__actions-row" v-if="pos.cartItems.length > 0">
+        <button class="cart__hold-btn" @click="handleHoldCart">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <line x1="9" y1="9" x2="15" y2="9"/>
+            <line x1="9" y1="13" x2="15" y2="13"/>
+            <line x1="9" y1="17" x2="13" y2="17"/>
+          </svg>
+          {{ pos.currentDraftId ? 'Update Hold' : 'Hold Cart' }}
+        </button>
+      </div>
       <button class="cart__pay" :disabled="!canCheckout" @click="handleCheckout">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16">
           <polyline points="20 6 9 17 4 12"/>
@@ -219,6 +230,21 @@ function fmt(v: number) {
 function triggerClearCart() {
   pos.clearCart();
   showClearConfirm.value = false;
+}
+
+async function handleHoldCart() {
+  if (pos.cartItems.length === 0) return;
+  try {
+    const isUpdate = !!pos.currentDraftId;
+    await pos.holdCurrentCart();
+    pos.showAlert(
+      isUpdate ? 'Draft Updated' : 'Cart Held',
+      isUpdate ? 'The draft invoice has been successfully updated.' : 'The current cart has been saved as a draft invoice.',
+      'success'
+    );
+  } catch (err: any) {
+    pos.showAlert('Error', 'Failed to hold cart: ' + err.message, 'error');
+  }
 }
 
 async function handleCheckout() {
@@ -408,6 +434,31 @@ async function handleCheckout() {
   padding: 10px 12px 12px;
   background: var(--pos-surface);
   flex-shrink: 0;
+}
+.cart__actions-row {
+  margin-bottom: 8px;
+  width: 100%;
+}
+.cart__hold-btn {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--pos-border);
+  background: var(--pos-surface-hover, rgba(0, 0, 0, 0.02));
+  color: var(--pos-text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.12s;
+  font-family: inherit;
+}
+.cart__hold-btn:hover {
+  background: var(--pos-border);
+  border-color: var(--pos-text-muted);
 }
 .cart__pay {
   width: 100%;

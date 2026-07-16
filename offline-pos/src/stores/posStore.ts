@@ -7,7 +7,7 @@ import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
 import { fetchItems, fetchItemByBarcode } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
-import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers, cachePartyBalance, getCachedPartyBalance } from '../db/posDB';
+import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers, cachePartyBalance, getCachedPartyBalance, saveHoldInvoice, updateHoldInvoice, getHoldInvoices, deleteHoldInvoice } from '../db/posDB';
 import call from '../lib/call';
 
 export interface POSItem {
@@ -156,6 +156,10 @@ export const usePOSStore = defineStore('pos', () => {
     batches: Array<{ batch_no: string; qty: number; expiry_date?: string }>;
   }>>({});
   const pickStrategy = ref<string>('FIFO');
+
+  // ─── Held Invoices State ──────────────────────────────────────────────────
+  const heldInvoices = ref<any[]>([]);
+  const currentDraftId = ref<number | null>(null);
 
   const warehouses = ref<string[]>([]);
 
@@ -915,6 +919,7 @@ export const usePOSStore = defineStore('pos', () => {
     cartDiscount.value = 0;
     additionalDiscount.value = 0;
     selectedItemIdx.value = null;
+    currentDraftId.value = null;
   }
 
   // ─── Computed Totals ─────────────────────────────────────────────────────
@@ -1985,6 +1990,62 @@ export const usePOSStore = defineStore('pos', () => {
     fetchCustomerBalance(selectedCustomer.value.name);
   }
 
+  // ─── Held Invoices Actions ────────────────────────────────────────────────
+  async function loadHeldInvoices() {
+    heldInvoices.value = await getHoldInvoices();
+  }
+
+  async function holdCurrentCart() {
+    if (cartItems.value.length === 0) return;
+
+    const holdData = JSON.parse(JSON.stringify({
+      customer: selectedCustomer.value,
+      cartItems: cartItems.value,
+      cartDiscount: cartDiscount.value,
+      additionalDiscount: additionalDiscount.value,
+      discountType: discountType.value,
+      created_at: new Date().toISOString(),
+      grand_total: roundedTotal.value,
+    }));
+
+    if (currentDraftId.value !== null) {
+      await updateHoldInvoice(currentDraftId.value, holdData);
+    } else {
+      await saveHoldInvoice(holdData);
+    }
+
+    clearCart();
+    await loadHeldInvoices();
+  }
+
+  async function resumeHeldInvoice(localId: number) {
+    const list = await getHoldInvoices();
+    const draft = list.find((d: any) => d.local_id === localId);
+    if (!draft) throw new Error('Draft not found.');
+
+    // Restore state
+    cartItems.value = draft.cartItems || [];
+    selectedCustomer.value = draft.customer || null;
+    cartDiscount.value = draft.cartDiscount || 0;
+    additionalDiscount.value = draft.additionalDiscount || 0;
+    discountType.value = draft.discountType || 'percent';
+    currentDraftId.value = localId;
+
+    if (selectedCustomer.value) {
+      await fetchCustomerBalance(selectedCustomer.value.name);
+    }
+
+    await loadHeldInvoices();
+  }
+
+  async function discardHeldInvoice(localId: number) {
+    await deleteHoldInvoice(localId);
+    if (currentDraftId.value === localId) {
+      currentDraftId.value = null;
+    }
+    await loadHeldInvoices();
+  }
+
   return {
     // Session
     session, isSessionLoading, initSession, clearSession,
@@ -2007,5 +2068,7 @@ export const usePOSStore = defineStore('pos', () => {
     activeAlert, showAlert, closeAlert,
     // Totals
     subtotal, totalDiscount, grandTotal, roundedTotal, roundingAdjustment, cartCount, taxes, totalTaxes,
+    // Held Invoices
+    heldInvoices, currentDraftId, loadHeldInvoices, holdCurrentCart, resumeHeldInvoice, discardHeldInvoice,
   };
 });

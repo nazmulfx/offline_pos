@@ -16,6 +16,21 @@
           <span class="pos-topbar__profile">{{ pos.session.pos_profile }}</span>
           <span class="pos-topbar__company">{{ pos.session.company }}</span>
         </div>
+
+        <!-- Forced Offline Toggle -->
+        <label class="pos-topbar__forced-offline" title="Force system into offline mode">
+          <span class="pos-topbar__forced-offline-switch">
+            <input type="checkbox" v-model="network.isForcedOffline" />
+            <span class="pos-topbar__forced-offline-slider"></span>
+          </span>
+          <span class="pos-topbar__forced-offline-label">Offline Mode</span>
+        </label>
+
+        <!-- Network status -->
+        <div class="pos-topbar__network" :class="{ offline: !network.isOnline }">
+          <span class="pos-topbar__network-dot"></span>
+          {{ network.isOnline ? 'Online' : 'Offline' }}
+        </div>
       </div>
 
       <div class="pos-topbar__center">
@@ -40,20 +55,23 @@
           <span class="pos-topbar__sync-count">{{ sync.pendingCount }}</span>
         </div>
 
-        <!-- Forced Offline Toggle -->
-        <label class="pos-topbar__forced-offline" title="Force system into offline mode">
-          <span class="pos-topbar__forced-offline-switch">
-            <input type="checkbox" v-model="network.isForcedOffline" />
-            <span class="pos-topbar__forced-offline-slider"></span>
+        <!-- Held Invoices Toggle -->
+        <button
+          class="pos-topbar__held-btn"
+          @click="showHeldPanel = true"
+          title="View held/draft invoices"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <line x1="9" y1="9" x2="15" y2="9"/>
+            <line x1="9" y1="13" x2="15" y2="13"/>
+            <line x1="9" y1="17" x2="13" y2="17"/>
+          </svg>
+          Held Invoices
+          <span v-if="pos.heldInvoices.length > 0" class="pos-topbar__held-count">
+            {{ pos.heldInvoices.length }}
           </span>
-          <span class="pos-topbar__forced-offline-label">Offline Mode</span>
-        </label>
-
-        <!-- Network status -->
-        <div class="pos-topbar__network" :class="{ offline: !network.isOnline }">
-          <span class="pos-topbar__network-dot"></span>
-          {{ network.isOnline ? 'Online' : 'Offline' }}
-        </div>
+        </button>
 
         <!-- Sync with Server -->
         <button
@@ -156,6 +174,9 @@
     <!-- Offline Sync Panel -->
     <OfflineSyncPanel :is-open="showSyncPanel" @close="showSyncPanel = false" />
 
+    <!-- Held Invoices Panel -->
+    <HeldInvoicesPanel :is-open="showHeldPanel" @close="showHeldPanel = false" />
+
     <!-- Success Toast -->
     <Transition name="toast">
       <div v-if="successToast" class="pos-toast" :class="{ offline: successToast.offline }">
@@ -207,6 +228,7 @@ import ItemDetails from '../components/pos/ItemDetails.vue';
 import PaymentModal from '../components/pos/PaymentModal.vue';
 import POSClosingModal from '../components/pos/POSClosingModal.vue';
 import OfflineSyncPanel from '../components/pos/OfflineSyncPanel.vue';
+import HeldInvoicesPanel from '../components/pos/HeldInvoicesPanel.vue';
 import { getPOSProfileData, printInvoiceOffline, checkOpeningEntry } from '../services/invoiceService';
 
 const router = useRouter();
@@ -218,6 +240,7 @@ const { isDark, toggleTheme } = useTheme();
 const showPayment = ref(false);
 const showClosing = ref(false);
 const showSyncPanel = ref(false);
+const showHeldPanel = ref(false);
 const successToast = ref<{ name: string; offline: boolean } | null>(null);
 const closedToast = ref<string | null>(null);
 const isLoggingOut = ref(false);
@@ -356,6 +379,7 @@ onMounted(() => {
   if (pos.customers.length === 0) {
     pos.loadCustomers('');
   }
+  pos.loadHeldInvoices();
 
   if (pos.session.pos_profile) {
     getPOSProfileData(pos.session.pos_profile).then((profileData) => {
@@ -988,5 +1012,36 @@ async function handleLogout() {
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(1.3); }
+}
+
+.pos-topbar__held-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--pos-border);
+  background: transparent;
+  color: var(--pos-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.pos-topbar__held-btn:hover {
+  border-color: #8b5cf6;
+  color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.08);
+}
+.pos-topbar__held-count {
+  background: #8b5cf6;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 99px;
+  min-width: 18px;
+  text-align: center;
 }
 </style>

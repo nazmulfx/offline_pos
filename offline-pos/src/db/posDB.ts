@@ -4,7 +4,7 @@
  */
 
 const DB_NAME = 'offline_pos_db';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let _db: IDBDatabase | null = null;
 
@@ -69,6 +69,14 @@ export function openPOSDB(): Promise<IDBDatabase> {
       // Party Balance store
       if (!db.objectStoreNames.contains('party_balance')) {
         db.createObjectStore('party_balance', { keyPath: 'id' });
+      }
+
+      // Held Invoices store
+      if (!db.objectStoreNames.contains('hold_invoices')) {
+        db.createObjectStore('hold_invoices', {
+          keyPath: 'local_id',
+          autoIncrement: true,
+        });
       }
     };
 
@@ -448,5 +456,51 @@ export async function getCachedPartyBalance(
   return withStore<any>('party_balance', 'readonly', (store) => store.get(id))
     .then((res) => res || null)
     .catch(() => null);
+}
+
+// ─── Held Invoices ──────────────────────────────────────────────────────────
+
+export async function saveHoldInvoice(holdData: any): Promise<number> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('hold_invoices', 'readwrite');
+    const store = tx.objectStore('hold_invoices');
+    const req = store.add(holdData);
+    req.onsuccess = () => resolve(req.result as number);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function updateHoldInvoice(localId: number, holdData: any): Promise<void> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('hold_invoices', 'readwrite');
+    const store = tx.objectStore('hold_invoices');
+    const req = store.put({ ...holdData, local_id: localId });
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function getHoldInvoices(): Promise<any[]> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('hold_invoices', 'readonly');
+    const store = tx.objectStore('hold_invoices');
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteHoldInvoice(localId: number): Promise<void> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('hold_invoices', 'readwrite');
+    const store = tx.objectStore('hold_invoices');
+    const req = store.delete(localId);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
 }
 

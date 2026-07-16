@@ -295,6 +295,9 @@ async function submitPayment() {
         await sync.refreshPendingCount();
       }
       await pos.decrementStock(pos.cartItems);
+      if (pos.currentDraftId !== null) {
+        await pos.discardHeldInvoice(pos.currentDraftId);
+      }
       pos.clearCart();
       emit('success', result.invoiceName || `OFFLINE-${result.localId}`, !!result.offline, result.doc, printWindow);
       close();
