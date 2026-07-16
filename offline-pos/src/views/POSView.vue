@@ -17,6 +17,12 @@
           <span class="pos-topbar__company">{{ pos.session.company }}</span>
         </div>
 
+        <!-- Network status -->
+        <div class="pos-topbar__network" :class="{ offline: !network.isOnline }">
+          <span class="pos-topbar__network-dot"></span>
+          {{ network.isOnline ? 'Online' : 'Offline' }}
+        </div>
+
         <!-- Forced Offline Toggle -->
         <label class="pos-topbar__forced-offline" title="Force system into offline mode">
           <span class="pos-topbar__forced-offline-switch">
@@ -25,12 +31,6 @@
           </span>
           <span class="pos-topbar__forced-offline-label">Offline Mode</span>
         </label>
-
-        <!-- Network status -->
-        <div class="pos-topbar__network" :class="{ offline: !network.isOnline }">
-          <span class="pos-topbar__network-dot"></span>
-          {{ network.isOnline ? 'Online' : 'Offline' }}
-        </div>
       </div>
 
       <div class="pos-topbar__center">
@@ -87,9 +87,11 @@
             stroke-width="2.5"
             width="14"
             height="14"
-            :class="{ rotating: isRefreshingData || sync.isSyncing }"
+            :class="{ downloading: isRefreshingData || sync.isSyncing }"
           >
-            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
           {{ (isRefreshingData || sync.isSyncing) ? 'Syncing...' : 'Sync with Server' }}
         </button>
@@ -906,9 +908,9 @@ async function handleLogout() {
   gap: 5px;
   padding: 7px 12px;
   border-radius: 8px;
-  border: 1px solid var(--pos-border);
-  background: transparent;
-  color: var(--pos-text-muted);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  background: rgba(99, 102, 241, 0.04);
+  color: #6366f1;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -918,7 +920,7 @@ async function handleLogout() {
 .pos-topbar__refresh-btn:hover:not(:disabled) {
   border-color: #6366f1;
   color: #6366f1;
-  background: rgba(99,102,241,0.08);
+  background: rgba(99, 102, 241, 0.08);
 }
 .pos-topbar__refresh-btn:disabled {
   opacity: 0.5;
@@ -931,6 +933,13 @@ async function handleLogout() {
 }
 .rotating {
   animation: spin 1s linear infinite;
+}
+@keyframes download-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(3px); }
+}
+.downloading {
+  animation: download-bounce 0.8s infinite ease-in-out;
 }
 /* ─── Main Layout ────────────────────────────────────────── */
 .pos-main {
