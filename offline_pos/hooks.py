@@ -146,6 +146,12 @@ doc_events = {
 	"Sales Invoice": {
 		"before_validate": "offline_pos.offline_pos.hooks_methods.sales_invoice.before_validate",
 	},
+	"Purchase Receipt": {
+		"validate": "offline_pos.offline_pos.hooks_methods.purchase_receipt.validate",
+	},
+	"Stock Entry": {
+		"validate": "offline_pos.offline_pos.hooks_methods.stock_entry.validate",
+	},
 	"GL Entry": {
 		"on_update": "offline_pos.offline_pos.hooks_methods.utils.on_gl_entry",
 		"on_cancel": "offline_pos.offline_pos.hooks_methods.utils.on_gl_entry",
@@ -268,7 +274,13 @@ fixtures = [
         "filters": [["name", "in", 
 			["Walk-In-Customer"]
         ]]
-    }
+    },
+	{
+        "dt": "Role Profile",
+        "filters": [["name", "in", 
+			["Offline POS"]
+        ]]
+    },
 ]
 
 
