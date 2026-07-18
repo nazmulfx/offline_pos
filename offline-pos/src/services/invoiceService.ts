@@ -508,7 +508,7 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
   const subtotal = doc.net_total || 0;
   const discount = doc.discount_amount || 0;
   const grandTotal = doc.grand_total || 0;
-  const paidAmount = doc.paid_amount || grandTotal;
+  const paidAmount = (doc.paid_amount !== undefined && doc.paid_amount !== null) ? doc.paid_amount : grandTotal;
 
   // Retrieve cached outstanding balance for customer from IndexedDB
   let prevOutstandingVal = 0;

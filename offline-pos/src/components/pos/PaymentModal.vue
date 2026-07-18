@@ -99,12 +99,7 @@
             </button>
           </div>
 
-          <!-- NumPad for selected payment -->
-          <NumberPad
-            :modes="[{ key: 'amount', label: 'Amount' }]"
-            initial-mode="amount"
-            @update="onNumpadUpdate"
-          />
+
 
           <!-- Footer actions -->
           <div class="payment-modal__footer">
@@ -153,7 +148,7 @@ import { usePOSStore } from '../../stores/posStore';
 import { useNetworkStore } from '../../stores/networkStore';
 import { useSyncStore } from '../../stores/syncStore';
 import { submitInvoice } from '../../services/invoiceService';
-import NumberPad from './NumberPad.vue';
+
 import { formatCurrency } from '../../lib/currency';
 
 const props = defineProps<{ isOpen: boolean }>();
@@ -238,9 +233,7 @@ function setCredit() {
   });
 }
 
-function onNumpadUpdate(_mode: string, value: string) {
-  paymentMethods.value[primaryMethodIdx.value].amount = parseFloat(value) || 0;
-}
+
 
 function methodIcon(method: string): string {
   const icons: Record<string, string> = {
