@@ -1138,8 +1138,8 @@ export const usePOSStore = defineStore('pos', () => {
     let defaultCustomerName: string | null = null;
     try {
       if (network.isOnline) {
-        console.log(`[POSStore] Fetching POS Settings (invoice_type, custom_default_customer) from server...`);
-        const [invType, defCust] = await Promise.all([
+        console.log(`[POSStore] Fetching POS Settings and System Currency from server...`);
+        const [invType, defCust, sysCurrency] = await Promise.all([
           call('frappe.client.get_single_value', {
             doctype: 'POS Settings',
             field: 'invoice_type',
@@ -1147,6 +1147,10 @@ export const usePOSStore = defineStore('pos', () => {
           call('frappe.client.get_single_value', {
             doctype: 'POS Settings',
             field: 'custom_default_customer',
+          }),
+          call('frappe.client.get_single_value', {
+            doctype: 'System Settings',
+            field: 'currency',
           }),
         ]);
         if (invType === 'Sales Invoice') invoiceType = 'Sales Invoice';
@@ -1156,11 +1160,14 @@ export const usePOSStore = defineStore('pos', () => {
         } else {
           localStorage.removeItem('pos_default_customer_name');
         }
+        if (sysCurrency) {
+          localStorage.setItem('pos_system_currency', sysCurrency);
+        }
       } else {
         defaultCustomerName = localStorage.getItem('pos_default_customer_name');
       }
     } catch (err) {
-      console.warn('[POSStore] Could not fetch POS Settings values:', err);
+      console.warn('[POSStore] Could not fetch POS Settings or System Currency values:', err);
       defaultCustomerName = localStorage.getItem('pos_default_customer_name');
     }
 

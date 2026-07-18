@@ -5,9 +5,9 @@
  * Offline: save to IndexedDB + sync_queue
  */
 import call from '../lib/call';
-import { saveDraftInvoice, addToSyncQueue, cachePOSProfile, getCachedPOSProfile } from '../db/posDB';
+import { saveDraftInvoice, addToSyncQueue, cachePOSProfile, getCachedPOSProfile, getCachedPartyBalance } from '../db/posDB';
 import type { CartItem, Customer, POSSession } from '../stores/posStore';
-import { formatNumber } from '../lib/currency';
+import { formatNumber, formatCurrency as formatWithCurrencySymbol } from '../lib/currency';
 
 interface CreateInvoicePayload {
   session: POSSession;
@@ -466,7 +466,7 @@ export async function getPastOrders(
   );
   return result || [];
 }
-export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Window | null, useIframe: boolean = false) {
+export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Window | null, useIframe: boolean = false) {
   let printWindow: Window | null = null;
   let printIframe: HTMLIFrameElement | null = null;
 
@@ -509,6 +509,49 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
   const discount = doc.discount_amount || 0;
   const grandTotal = doc.grand_total || 0;
   const paidAmount = doc.paid_amount || grandTotal;
+
+  // Retrieve cached outstanding balance for customer from IndexedDB
+  let prevOutstandingVal = 0;
+  if (customer && company) {
+    try {
+      const balanceRec = await getCachedPartyBalance(company, 'Customer', customer);
+      if (balanceRec) {
+        prevOutstandingVal = balanceRec.party_current_balance || 0;
+      }
+    } catch (e) {
+      console.warn('[printInvoiceOffline] Failed to get cached party balance:', e);
+    }
+  }
+
+  // Calculate previous outstanding, total due, and current due
+  const invoiceOutstanding = grandTotal - paidAmount;
+  const previousOutstanding = prevOutstandingVal - invoiceOutstanding;
+  const totalDue = previousOutstanding + grandTotal;
+  const currentDue = totalDue - paidAmount;
+
+  let docCurrency = doc.currency;
+  if (!docCurrency) {
+    try {
+      const sessionStr = localStorage.getItem('pos_session');
+      if (sessionStr) {
+        const sessionData = JSON.parse(sessionStr);
+        docCurrency = sessionData?.currency;
+      }
+    } catch (e) {
+      console.warn('[printInvoiceOffline] Failed to read pos_session from localStorage:', e);
+    }
+  }
+  if (!docCurrency && doc.pos_profile) {
+    try {
+      const profile = await getCachedPOSProfile(doc.pos_profile);
+      docCurrency = profile?.currency;
+    } catch (e) {
+      console.warn('[printInvoiceOffline] Failed to read cached POS profile:', e);
+    }
+  }
+  if (!docCurrency) {
+    docCurrency = localStorage.getItem('pos_system_currency') || 'BDT';
+  }
 
   // Render using cached HTML print format layout if available
   if (pfData && pfData.html) {
@@ -558,6 +601,45 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
         });
       }
 
+      // 1b. Walk the tree to locate the payment row placeholder ___MODE_OF_PAYMENT___
+      const pWalker = docDom.createTreeWalker(docDom.body, NodeFilter.SHOW_TEXT);
+      let paymentRow: HTMLElement | null = null;
+      let pNode: Node | null;
+      while (pNode = pWalker.nextNode()) {
+        if (pNode.nodeValue && pNode.nodeValue.includes('___MODE_OF_PAYMENT___')) {
+          let parent = pNode.parentElement;
+          while (parent && parent.tagName !== 'TR' && parent.tagName !== 'LI' && parent.tagName !== 'DIV' && parent.tagName !== 'BODY') {
+            if (parent.classList.contains('print-format-row') || parent.tagName === 'TR' || parent.tagName === 'LI') {
+              break;
+            }
+            parent = parent.parentElement;
+          }
+          paymentRow = parent;
+          break;
+        }
+      }
+
+      if (paymentRow && paymentRow.parentElement) {
+        const parentContainer = paymentRow.parentElement;
+        const rowTemplate = paymentRow.cloneNode(true) as HTMLElement;
+        
+        // Remove template placeholder row
+        paymentRow.remove();
+
+        // Multiply rows for each payment with amount > 0
+        const paymentsList = (doc.payments || []).filter((p: any) => (p.amount || 0) > 0);
+        paymentsList.forEach((pay: any) => {
+          const newRow = rowTemplate.cloneNode(true) as HTMLElement;
+          let rowHtml = newRow.innerHTML;
+          
+          rowHtml = rowHtml.replace(/___MODE_OF_PAYMENT___/g, pay.mode_of_payment || '');
+          rowHtml = rowHtml.replace(/999,?777\.77/g, formatCurrency(pay.amount || 0));
+          
+          newRow.innerHTML = rowHtml;
+          parentContainer.appendChild(newRow);
+        });
+      }
+
       // Replace linked CSS stylesheets with inline styles
       const links = docDom.querySelectorAll('link[rel="stylesheet"]');
       links.forEach((link: any) => {
@@ -597,6 +679,10 @@ export function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Win
       finalHtml = finalHtml.replace(/999,?444\.44/g, formatCurrency(discount));
       finalHtml = finalHtml.replace(/999,?555\.55/g, formatCurrency(grandTotal));
       finalHtml = finalHtml.replace(/999,?666\.66/g, formatCurrency(paidAmount));
+      
+      finalHtml = finalHtml.replace(/___PREV_OUTSTANDING___/g, formatWithCurrencySymbol(previousOutstanding, docCurrency));
+      finalHtml = finalHtml.replace(/___TOTAL_DUE___/g, formatWithCurrencySymbol(totalDue, docCurrency));
+      finalHtml = finalHtml.replace(/___CURR_DUE___/g, formatWithCurrencySymbol(currentDue, docCurrency));
 
       // 3. Ensure automatic print triggering
       const closeScript = useIframe ? `

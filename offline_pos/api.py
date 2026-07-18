@@ -75,6 +75,11 @@ def get_print_format_template(print_format, doctype="POS Invoice"):
 			"uom": "___ITEM_UOM___"
 		})
 		
+		doc.append("payments", {
+			"mode_of_payment": "___MODE_OF_PAYMENT___",
+			"amount": 999777.77
+		})
+		
 		html = frappe.get_print(doctype, doc.name, print_format, doc=doc)
 		return {
 			"name": print_format,
