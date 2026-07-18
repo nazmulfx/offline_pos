@@ -207,6 +207,46 @@
         </div>
       </div>
     </Transition>
+
+    <!-- Print Format Choice Dialog (only when print_mode is 'POS and Standard') -->
+    <Transition name="fade">
+      <div v-if="showPrintChoiceModal" class="pos-print-choice-overlay">
+        <div class="pos-print-choice-card">
+          <div class="pos-print-choice-header">
+            <div class="pos-print-choice-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24">
+                <polyline points="6 9 6 2 18 2 18 9"/>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+                <rect x="6" y="14" width="12" height="8"/>
+              </svg>
+            </div>
+            <h3>Print Invoice</h3>
+            <p>Select which format you would like to print for this transaction.</p>
+          </div>
+          <div class="pos-print-choice-body">
+            <button 
+              class="pos-print-choice-btn pos-print-choice-btn--pos"
+              @click="handlePrintChoice('POS')"
+            >
+              <span class="btn-icon">🧾</span>
+              <span class="btn-title">POS Receipt</span>
+              <span class="btn-subtitle">Format: {{ pos.session?.print_format || 'POS print format' }}</span>
+            </button>
+            <button 
+              class="pos-print-choice-btn pos-print-choice-btn--standard"
+              @click="handlePrintChoice('Standard')"
+            >
+              <span class="btn-icon">📄</span>
+              <span class="btn-title">Standard Invoice</span>
+              <span class="btn-subtitle">Format: {{ pos.session?.standard_print_format || 'Standard print format' }}</span>
+            </button>
+          </div>
+          <div class="pos-print-choice-footer">
+            <button class="pos-print-choice-cancel-btn" @click="cancelPrintChoice">Close without printing</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 
   <!-- No session — redirect to opening -->
@@ -244,6 +284,11 @@ const showClosing = ref(false);
 const showSyncPanel = ref(false);
 const showHeldPanel = ref(false);
 const successToast = ref<{ name: string; offline: boolean } | null>(null);
+const showPrintChoiceModal = ref(false);
+const printChoiceDoc = ref<any>(null);
+const printChoiceInvoiceName = ref('');
+const printChoiceOffline = ref(false);
+const printChoicePreOpenedWindow = ref<Window | null>(null);
 const closedToast = ref<string | null>(null);
 const isLoggingOut = ref(false);
 const $auth = inject<any>('$auth');
@@ -390,6 +435,8 @@ onMounted(() => {
         pos.session.apply_discount_on = profileData.apply_discount_on || 'Grand Total';
         pos.session.print_format = profileData.print_format || '';
         pos.session.custom_offline_print_format = profileData.custom_offline_print_format || '';
+        pos.session.standard_print_format = profileData.standard_print_format || '';
+        pos.session.print_mode = profileData.print_mode || 'POS';
         pos.session.print_receipt_on_order_complete = profileData.print_receipt_on_order_complete ? 1 : 0;
         pos.session.open_print_dialogue_on_invoice_creation = profileData.open_print_dialogue_on_invoice_creation ? 1 : 0;
         pos.session.allow_partial_payment = profileData.allow_partial_payment;
@@ -488,13 +535,54 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
   successToast.value = { name: invoiceName, offline };
   setTimeout(() => { successToast.value = null; }, 5000);
 
-  const printFormat = pos.session?.print_format || '';
-  const offlinePrintFormat = pos.session?.custom_offline_print_format || printFormat;
+  const printMode = pos.session?.print_mode || 'POS';
+
+  if (printMode === 'POS and Standard') {
+    printChoiceDoc.value = doc;
+    printChoiceInvoiceName.value = invoiceName;
+    printChoiceOffline.value = offline;
+    printChoicePreOpenedWindow.value = preOpenedWindow;
+    showPrintChoiceModal.value = true;
+  } else if (printMode === 'Standard') {
+    await executePrint('Standard', invoiceName, offline, doc, preOpenedWindow);
+  } else {
+    await executePrint('POS', invoiceName, offline, doc, preOpenedWindow);
+  }
+}
+
+function cancelPrintChoice() {
+  showPrintChoiceModal.value = false;
+  if (printChoicePreOpenedWindow.value) {
+    printChoicePreOpenedWindow.value.close();
+  }
+}
+
+async function handlePrintChoice(formatType: 'POS' | 'Standard') {
+  showPrintChoiceModal.value = false;
+  await executePrint(
+    formatType,
+    printChoiceInvoiceName.value,
+    printChoiceOffline.value,
+    printChoiceDoc.value,
+    printChoicePreOpenedWindow.value
+  );
+}
+
+async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string, offline: boolean, doc?: any, preOpenedWindow?: Window | null) {
+  const printFormat = formatType === 'Standard'
+    ? (pos.session?.standard_print_format || 'Standard')
+    : (pos.session?.print_format || '');
+  const offlinePrintFormat = formatType === 'Standard'
+    ? (pos.session?.standard_print_format || 'Standard')
+    : (pos.session?.custom_offline_print_format || printFormat);
+
   const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
   const openDialogue = pos.session?.open_print_dialogue_on_invoice_creation === 1;
 
+  const forceOfflinePrint = offline || formatType === 'Standard';
+
   if (autoPrint) {
-    if (!offline) {
+    if (!forceOfflinePrint) {
       try {
         const doctype = pos.session?.invoice_type || 'POS Invoice';
         const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}`;
@@ -549,7 +637,7 @@ async function onPaymentSuccess(invoiceName: string, offline: boolean, doc?: any
       printInvoiceOffline(doc, pfData, null, true);
     }
   } else if (openDialogue) {
-    if (!offline) {
+    if (!forceOfflinePrint) {
       try {
         const doctype = pos.session?.invoice_type || 'POS Invoice';
         const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}`;
@@ -1052,5 +1140,121 @@ async function handleLogout() {
   border-radius: 99px;
   min-width: 18px;
   text-align: center;
+}
+
+.pos-print-choice-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.pos-print-choice-card {
+  background: var(--pos-bg-card, #ffffff);
+  border: 1px solid var(--pos-border, #e5e7eb);
+  border-radius: 16px;
+  width: 90%;
+  max-width: 480px;
+  padding: 24px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  color: var(--pos-text, #1f2937);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.pos-print-choice-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.pos-print-choice-icon {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  padding: 12px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+.pos-print-choice-header h3 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+}
+.pos-print-choice-header p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--pos-text-muted, #6b7280);
+}
+.pos-print-choice-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.pos-print-choice-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 20px 12px;
+  border-radius: 12px;
+  border: 2px solid var(--pos-border, #e5e7eb);
+  background: var(--pos-bg-sub, #f9fafb);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+.pos-print-choice-btn:hover {
+  transform: translateY(-2px);
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.05);
+}
+.pos-print-choice-btn .btn-icon {
+  font-size: 32px;
+}
+.pos-print-choice-btn .btn-title {
+  font-weight: 750;
+  font-size: 15px;
+  color: var(--pos-text, #1f2937);
+}
+.pos-print-choice-btn .btn-subtitle {
+  font-size: 11px;
+  color: var(--pos-text-muted, #6b7280);
+}
+.pos-print-choice-footer {
+  display: flex;
+  justify-content: center;
+}
+.pos-print-choice-cancel-btn {
+  background: transparent;
+  border: none;
+  color: var(--pos-text-muted, #6b7280);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 8px 16px;
+  border-radius: 8px;
+  transition: all 0.15s;
+}
+.pos-print-choice-cancel-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--pos-text, #1f2937);
+}
+
+/* Transitions */
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
 }
 </style>

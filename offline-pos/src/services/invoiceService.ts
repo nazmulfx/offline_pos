@@ -419,6 +419,21 @@ export async function getPOSProfileData(posProfile: string): Promise<any> {
           console.warn('[InvoiceService] Failed to cache custom offline print format template:', pfErr);
         }
       }
+
+      if (data.standard_print_format) {
+        try {
+          const pfData = await call(
+            'offline_pos.api.get_print_format_template',
+            { print_format: data.standard_print_format, doctype: 'POS Invoice' }
+          );
+          if (pfData) {
+            localStorage.setItem(`print_format_${data.standard_print_format}`, JSON.stringify(pfData));
+            await cachePrintStylesheets(pfData.html);
+          }
+        } catch (pfErr) {
+          console.warn('[InvoiceService] Failed to cache standard print format template:', pfErr);
+        }
+      }
     }
     return data;
   } catch (err) {
@@ -466,6 +481,80 @@ export async function getPastOrders(
   );
   return result || [];
 }
+function numberToWords(amount: number, currencyCode: string = 'NGN'): string {
+  const units = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  const scales = ["", "Thousand", "Million", "Billion"];
+
+  function convertSection(num: number): string {
+    let str = "";
+    if (num >= 100) {
+      str += units[Math.floor(num / 100)] + " Hundred ";
+      num %= 100;
+    }
+    if (num >= 20) {
+      str += tens[Math.floor(num / 10)] + " ";
+      num %= 10;
+    }
+    if (num > 0) {
+      str += units[num] + " ";
+    }
+    return str.trim();
+  }
+
+  const mainUnit = Math.floor(amount);
+  const subUnit = Math.round((amount - mainUnit) * 100);
+
+  let currencyName = "Naira";
+  let subCurrencyName = "Kobo";
+  
+  if (currencyCode === 'BDT') {
+    currencyName = "Taka";
+    subCurrencyName = "Poisha";
+  } else if (currencyCode === 'USD') {
+    currencyName = "Dollars";
+    subCurrencyName = "Cents";
+  } else if (currencyCode === 'EUR') {
+    currencyName = "Euros";
+    subCurrencyName = "Cents";
+  } else if (currencyCode === 'GBP') {
+    currencyName = "Pounds";
+    subCurrencyName = "Pence";
+  } else if (currencyCode && currencyCode !== 'NGN') {
+    currencyName = currencyCode;
+    subCurrencyName = "Cent";
+  }
+
+  if (mainUnit === 0 && subUnit === 0) return `Zero ${currencyName} Only`;
+
+  let words = "";
+  if (mainUnit > 0) {
+    let tempMain = mainUnit;
+    let scaleIdx = 0;
+    let parts: string[] = [];
+    while (tempMain > 0) {
+      const part = tempMain % 1000;
+      if (part > 0) {
+        let partStr = convertSection(part);
+        if (scales[scaleIdx]) {
+          partStr += " " + scales[scaleIdx];
+        }
+        parts.unshift(partStr);
+      }
+      tempMain = Math.floor(tempMain / 1000);
+      scaleIdx++;
+    }
+    words += parts.join(", ") + " " + currencyName;
+  }
+
+  if (subUnit > 0) {
+    if (words) words += " and ";
+    words += convertSection(subUnit) + " " + subCurrencyName;
+  }
+
+  return words ? words + " Only" : "";
+}
+
 export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Window | null, useIframe: boolean = false) {
   let printWindow: Window | null = null;
   let printIframe: HTMLIFrameElement | null = null;
@@ -499,6 +588,7 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
   const date = doc.posting_date || new Date().toISOString().split('T')[0];
   const time = doc.posting_time || new Date().toLocaleTimeString('en-US', { hour12: false });
   const customer = doc.customer || '';
+  const customerName = doc.customer_name || doc.customer || '';
   const items = doc.items || [];
   
   const formatCurrency = (val: number) => {
@@ -566,8 +656,16 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
       while (node = walker.nextNode()) {
         if (node.nodeValue && node.nodeValue.includes('___ITEM_NAME___')) {
           let parent = node.parentElement;
-          while (parent && parent.tagName !== 'TR' && parent.tagName !== 'LI' && parent.tagName !== 'DIV' && parent.tagName !== 'BODY') {
-            if (parent.classList.contains('print-format-row') || parent.tagName === 'TR' || parent.tagName === 'LI') {
+          while (parent) {
+            if (
+              parent.tagName === 'TR' ||
+              parent.tagName === 'LI' ||
+              parent.classList.contains('row') ||
+              parent.classList.contains('print-format-row')
+            ) {
+              break;
+            }
+            if (parent.tagName === 'BODY' || parent.id === 'print-format') {
               break;
             }
             parent = parent.parentElement;
@@ -580,6 +678,7 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
       if (itemRow && itemRow.parentElement) {
         const parentContainer = itemRow.parentElement;
         const rowTemplate = itemRow.cloneNode(true) as HTMLElement;
+        const nextSibling = itemRow.nextSibling;
         
         // Remove template placeholder row
         itemRow.remove();
@@ -592,12 +691,17 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
           rowHtml = rowHtml.replace(/___ITEM_NAME___/g, item.item_name || '');
           rowHtml = rowHtml.replace(/___ITEM_CODE___/g, item.item_code || '');
           rowHtml = rowHtml.replace(/___ITEM_UOM___/g, item.uom || '');
+          rowHtml = rowHtml.replace(/88888\.88/g, String(item.conversion_factor || 1));
           rowHtml = rowHtml.replace(/999\.99/g, String(item.qty));
           rowHtml = rowHtml.replace(/999,?111\.11/g, formatCurrency(item.rate));
           rowHtml = rowHtml.replace(/999,?222\.22/g, formatCurrency(item.qty * item.rate));
           
           newRow.innerHTML = rowHtml;
-          parentContainer.appendChild(newRow);
+          if (nextSibling) {
+            parentContainer.insertBefore(newRow, nextSibling);
+          } else {
+            parentContainer.appendChild(newRow);
+          }
         });
       }
 
@@ -608,8 +712,16 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
       while (pNode = pWalker.nextNode()) {
         if (pNode.nodeValue && pNode.nodeValue.includes('___MODE_OF_PAYMENT___')) {
           let parent = pNode.parentElement;
-          while (parent && parent.tagName !== 'TR' && parent.tagName !== 'LI' && parent.tagName !== 'DIV' && parent.tagName !== 'BODY') {
-            if (parent.classList.contains('print-format-row') || parent.tagName === 'TR' || parent.tagName === 'LI') {
+          while (parent) {
+            if (
+              parent.tagName === 'TR' ||
+              parent.tagName === 'LI' ||
+              parent.classList.contains('row') ||
+              parent.classList.contains('print-format-row')
+            ) {
+              break;
+            }
+            if (parent.tagName === 'BODY' || parent.id === 'print-format') {
               break;
             }
             parent = parent.parentElement;
@@ -622,6 +734,7 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
       if (paymentRow && paymentRow.parentElement) {
         const parentContainer = paymentRow.parentElement;
         const rowTemplate = paymentRow.cloneNode(true) as HTMLElement;
+        const nextSibling = paymentRow.nextSibling;
         
         // Remove template placeholder row
         paymentRow.remove();
@@ -636,7 +749,11 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
           rowHtml = rowHtml.replace(/999,?777\.77/g, formatCurrency(pay.amount || 0));
           
           newRow.innerHTML = rowHtml;
-          parentContainer.appendChild(newRow);
+          if (nextSibling) {
+            parentContainer.insertBefore(newRow, nextSibling);
+          } else {
+            parentContainer.appendChild(newRow);
+          }
         });
       }
 
@@ -667,6 +784,7 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
       let finalHtml = docDom.documentElement.outerHTML;
       finalHtml = finalHtml.replace(/___INV_NAME___/g, name);
       finalHtml = finalHtml.replace(/___COMPANY___/g, company);
+      finalHtml = finalHtml.replace(/___CUSTOMER_NAME___/g, customerName);
       finalHtml = finalHtml.replace(/___CUSTOMER___/g, customer);
       
       const dateRegex = /(1999[-/.]09[-/.]09)|(09[-/.]09[-/.]1999)|(Sep(tember)?\s+9,?\s+1999)|(9\s+Sep(tember)?\s+1999)/gi;
@@ -683,6 +801,12 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
       finalHtml = finalHtml.replace(/___PREV_OUTSTANDING___/g, formatWithCurrencySymbol(previousOutstanding, docCurrency));
       finalHtml = finalHtml.replace(/___TOTAL_DUE___/g, formatWithCurrencySymbol(totalDue, docCurrency));
       finalHtml = finalHtml.replace(/___CURR_DUE___/g, formatWithCurrencySymbol(currentDue, docCurrency));
+
+      const totalQty = items.reduce((sum: number, item: any) => sum + (item.qty || 0), 0);
+      finalHtml = finalHtml.replace(/9999\.99/g, String(totalQty));
+
+      const inWords = numberToWords(grandTotal, docCurrency);
+      finalHtml = finalHtml.replace(/___IN_WORDS___/g, inWords);
 
       // 3. Ensure automatic print triggering
       const closeScript = useIframe ? `
