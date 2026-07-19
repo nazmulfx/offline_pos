@@ -84,9 +84,10 @@ export interface POSSession {
   invoice_type: 'POS Invoice' | 'Sales Invoice';
   apply_discount_on?: string;
   hide_images?: number;
-  print_format?: string;
-  custom_offline_print_format?: string;
+  pos_print_format?: string;
   standard_print_format?: string;
+  offline_pos_print_format?: string;
+  custom_offline_standard_print_format?: string;
   print_mode?: string;
   print_receipt_on_order_complete?: number;
   open_print_dialogue_on_invoice_creation?: number;

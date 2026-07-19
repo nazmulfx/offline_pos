@@ -230,7 +230,7 @@
             >
               <span class="btn-icon">🧾</span>
               <span class="btn-title">POS Receipt</span>
-              <span class="btn-subtitle">Format: {{ pos.session?.print_format || 'POS print format' }}</span>
+              <span class="btn-subtitle">Format: {{ printChoiceOffline ? (pos.session?.offline_pos_print_format || 'POS print format') : (pos.session?.pos_print_format || 'POS print format') }}</span>
             </button>
             <button 
               class="pos-print-choice-btn pos-print-choice-btn--standard"
@@ -238,7 +238,7 @@
             >
               <span class="btn-icon">📄</span>
               <span class="btn-title">Standard Invoice</span>
-              <span class="btn-subtitle">Format: {{ pos.session?.standard_print_format || 'Standard print format' }}</span>
+              <span class="btn-subtitle">Format: {{ printChoiceOffline ? (pos.session?.custom_offline_standard_print_format || 'Standard print format') : (pos.session?.standard_print_format || 'Standard print format') }}</span>
             </button>
           </div>
           <div class="pos-print-choice-footer">
@@ -271,7 +271,7 @@ import PaymentModal from '../components/pos/PaymentModal.vue';
 import POSClosingModal from '../components/pos/POSClosingModal.vue';
 import OfflineSyncPanel from '../components/pos/OfflineSyncPanel.vue';
 import HeldInvoicesPanel from '../components/pos/HeldInvoicesPanel.vue';
-import { getPOSProfileData, printInvoiceOffline, checkOpeningEntry } from '../services/invoiceService';
+import { getPOSProfileData, printInvoiceOffline, checkOpeningEntry, resolvePrintFormat } from '../services/invoiceService';
 
 const router = useRouter();
 const pos = usePOSStore();
@@ -433,9 +433,10 @@ onMounted(() => {
       if (profileData && pos.session) {
         pos.session.hide_images = profileData.hide_images ? 1 : 0;
         pos.session.apply_discount_on = profileData.apply_discount_on || 'Grand Total';
-        pos.session.print_format = profileData.print_format || '';
-        pos.session.custom_offline_print_format = profileData.custom_offline_print_format || '';
+        pos.session.pos_print_format = profileData.pos_print_format || '';
         pos.session.standard_print_format = profileData.standard_print_format || '';
+        pos.session.offline_pos_print_format = profileData.offline_pos_print_format || '';
+        pos.session.custom_offline_standard_print_format = profileData.custom_offline_standard_print_format || '';
         pos.session.print_mode = profileData.print_mode || 'POS';
         pos.session.print_receipt_on_order_complete = profileData.print_receipt_on_order_complete ? 1 : 0;
         pos.session.open_print_dialogue_on_invoice_creation = profileData.open_print_dialogue_on_invoice_creation ? 1 : 0;
@@ -571,15 +572,17 @@ async function handlePrintChoice(formatType: 'POS' | 'Standard') {
 async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string, offline: boolean, doc?: any, preOpenedWindow?: Window | null) {
   const printFormat = formatType === 'Standard'
     ? (pos.session?.standard_print_format || 'Standard')
-    : (pos.session?.print_format || '');
+    : (pos.session?.pos_print_format || '');
   const offlinePrintFormat = formatType === 'Standard'
-    ? (pos.session?.standard_print_format || 'Standard')
-    : (pos.session?.custom_offline_print_format || printFormat);
+    ? (pos.session?.custom_offline_standard_print_format || 'Standard')
+    : (pos.session?.offline_pos_print_format || printFormat);
+
+  const pfData = doc ? await resolvePrintFormat(offlinePrintFormat) : null;
 
   const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
   const openDialogue = pos.session?.open_print_dialogue_on_invoice_creation === 1;
 
-  const forceOfflinePrint = offline || formatType === 'Standard';
+  const forceOfflinePrint = offline;
 
   if (autoPrint) {
     if (!forceOfflinePrint) {
@@ -611,8 +614,6 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
         if (!success) {
           if (doc) {
             console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
-            const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
-            const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
             printInvoiceOffline(doc, pfData, null, true);
           } else {
             const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
@@ -622,8 +623,6 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
       } catch (err) {
         console.warn('Failed to fetch and inject printview for iframe print, falling back to offline printing:', err);
         if (doc) {
-          const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
-          const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
           printInvoiceOffline(doc, pfData, null, true);
         } else {
           const doctype = pos.session?.invoice_type || 'POS Invoice';
@@ -632,8 +631,6 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
         }
       }
     } else if (doc) {
-      const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
-      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
       printInvoiceOffline(doc, pfData, null, true);
     }
   } else if (openDialogue) {
@@ -692,8 +689,6 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
         if (!success) {
           if (doc) {
             console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
-            const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
-            const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
             printInvoiceOffline(doc, pfData, preOpenedWindow, false);
           } else {
             const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
@@ -707,8 +702,6 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
       } catch (err) {
         console.warn('Failed to fetch and inject printview, falling back to offline printing:', err);
         if (doc) {
-          const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
-          const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
           printInvoiceOffline(doc, pfData, preOpenedWindow, false);
         } else {
           const doctype = pos.session?.invoice_type || 'POS Invoice';
@@ -721,8 +714,6 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
         }
       }
     } else if (doc) {
-      const cachedPF = localStorage.getItem(`print_format_${offlinePrintFormat}`);
-      const pfData = cachedPF ? JSON.parse(cachedPF) : { name: offlinePrintFormat };
       printInvoiceOffline(doc, pfData, preOpenedWindow, false);
     }
   } else if (preOpenedWindow) {

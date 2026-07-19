@@ -5,9 +5,22 @@
  * Offline: save to IndexedDB + sync_queue
  */
 import call from '../lib/call';
-import { saveDraftInvoice, addToSyncQueue, cachePOSProfile, getCachedPOSProfile, getCachedPartyBalance } from '../db/posDB';
+import {
+  saveDraftInvoice,
+  addToSyncQueue,
+  cachePOSProfile,
+  getCachedPOSProfile,
+  getCachedPartyBalance,
+  cachePrintFormat,
+  getCachedPrintFormat,
+} from '../db/posDB';
 import type { CartItem, Customer, POSSession } from '../stores/posStore';
 import { formatNumber, formatCurrency as formatWithCurrencySymbol } from '../lib/currency';
+
+import posPrintFormat from '../print_templates/pos_print_format.json';
+import standardPrintFormat from '../print_templates/standard_print_format.json';
+import offlinePosPrintFormat from '../print_templates/offline_pos_print_format.json';
+import offlineStandardPrintFormat from '../print_templates/offline_standard_print_format.json';
 
 interface CreateInvoicePayload {
   session: POSSession;
@@ -382,6 +395,15 @@ async function cachePrintStylesheets(htmlText?: string) {
 }
 
 export async function getPOSProfileData(posProfile: string): Promise<any> {
+  // Pre-populate IndexedDB with local static templates
+  for (const [name, data] of Object.entries(STATIC_TEMPLATES)) {
+    try {
+      await cachePrintFormat(name, data);
+    } catch (e) {
+      console.warn('[InvoiceService] Failed to pre-populate static print format:', name, e);
+    }
+  }
+
   try {
     const data = await call(
       'erpnext.selling.page.point_of_sale.point_of_sale.get_pos_profile_data',
@@ -393,35 +415,21 @@ export async function getPOSProfileData(posProfile: string): Promise<any> {
       }
       await cachePOSProfile(data);
 
-      if (data.print_format) {
+      if (data.pos_print_format) {
         try {
           const pfData = await call(
             'offline_pos.api.get_print_format_template',
-            { print_format: data.print_format, doctype: 'POS Invoice' }
+            { print_format: data.pos_print_format, doctype: 'POS Invoice' }
           );
           if (pfData) {
-            localStorage.setItem(`print_format_${data.print_format}`, JSON.stringify(pfData));
+            localStorage.setItem(`print_format_${data.pos_print_format}`, JSON.stringify(pfData));
+            await cachePrintFormat(data.pos_print_format, pfData);
             await cachePrintStylesheets(pfData.html);
           } else {
             await cachePrintStylesheets();
           }
         } catch (pfErr) {
-          console.warn('[InvoiceService] Failed to cache print format template:', pfErr);
-        }
-      }
-
-      if (data.custom_offline_print_format) {
-        try {
-          const pfData = await call(
-            'offline_pos.api.get_print_format_template',
-            { print_format: data.custom_offline_print_format, doctype: 'POS Invoice' }
-          );
-          if (pfData) {
-            localStorage.setItem(`print_format_${data.custom_offline_print_format}`, JSON.stringify(pfData));
-            await cachePrintStylesheets(pfData.html);
-          }
-        } catch (pfErr) {
-          console.warn('[InvoiceService] Failed to cache custom offline print format template:', pfErr);
+          console.warn('[InvoiceService] Failed to cache pos_print_format template:', pfErr);
         }
       }
 
@@ -433,10 +441,43 @@ export async function getPOSProfileData(posProfile: string): Promise<any> {
           );
           if (pfData) {
             localStorage.setItem(`print_format_${data.standard_print_format}`, JSON.stringify(pfData));
+            await cachePrintFormat(data.standard_print_format, pfData);
             await cachePrintStylesheets(pfData.html);
           }
         } catch (pfErr) {
-          console.warn('[InvoiceService] Failed to cache standard print format template:', pfErr);
+          console.warn('[InvoiceService] Failed to cache standard_print_format template:', pfErr);
+        }
+      }
+
+      if (data.offline_pos_print_format) {
+        try {
+          const pfData = await call(
+            'offline_pos.api.get_print_format_template',
+            { print_format: data.offline_pos_print_format, doctype: 'POS Invoice' }
+          );
+          if (pfData) {
+            localStorage.setItem(`print_format_${data.offline_pos_print_format}`, JSON.stringify(pfData));
+            await cachePrintFormat(data.offline_pos_print_format, pfData);
+            await cachePrintStylesheets(pfData.html);
+          }
+        } catch (pfErr) {
+          console.warn('[InvoiceService] Failed to cache offline_pos_print_format template:', pfErr);
+        }
+      }
+
+      if (data.custom_offline_standard_print_format) {
+        try {
+          const pfData = await call(
+            'offline_pos.api.get_print_format_template',
+            { print_format: data.custom_offline_standard_print_format, doctype: 'POS Invoice' }
+          );
+          if (pfData) {
+            localStorage.setItem(`print_format_${data.custom_offline_standard_print_format}`, JSON.stringify(pfData));
+            await cachePrintFormat(data.custom_offline_standard_print_format, pfData);
+            await cachePrintStylesheets(pfData.html);
+          }
+        } catch (pfErr) {
+          console.warn('[InvoiceService] Failed to cache custom_offline_standard_print_format template:', pfErr);
         }
       }
     }
@@ -1044,4 +1085,57 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
       printIframe?.remove();
     });
   }
+}
+
+const STATIC_TEMPLATES: Record<string, any> = {
+  'POS Print Format': posPrintFormat,
+  'Standard Print format': standardPrintFormat,
+  'Offline POS Print Format': offlinePosPrintFormat,
+  'Offline Standard Print Format': offlineStandardPrintFormat,
+};
+
+export async function resolvePrintFormat(formatName: string): Promise<any> {
+  if (!formatName) return { name: '' };
+
+  // 1. Try IndexedDB
+  try {
+    const cached = await getCachedPrintFormat(formatName);
+    if (cached) {
+      return cached;
+    }
+  } catch (err) {
+    console.warn('[resolvePrintFormat] IndexedDB error:', err);
+  }
+
+  // 2. Try legacy localStorage
+  const legacy = localStorage.getItem(`print_format_${formatName}`);
+  if (legacy) {
+    try {
+      const data = JSON.parse(legacy);
+      // Save it to IndexedDB to migrate it
+      await cachePrintFormat(formatName, data);
+      return data;
+    } catch (e) {}
+  }
+
+  // 3. Match static templates by name
+  const matchedKey = Object.keys(STATIC_TEMPLATES).find(
+    (key) => key.toLowerCase() === formatName.toLowerCase()
+  );
+  if (matchedKey) {
+    return STATIC_TEMPLATES[matchedKey];
+  }
+
+  // 4. Match static templates by keywords fallback
+  const lowerName = formatName.toLowerCase();
+  if (lowerName.includes('offline') && lowerName.includes('standard')) {
+    return STATIC_TEMPLATES['Offline Standard Print Format'];
+  } else if (lowerName.includes('offline')) {
+    return STATIC_TEMPLATES['Offline POS Print Format'];
+  } else if (lowerName.includes('standard')) {
+    return STATIC_TEMPLATES['Standard Print format'];
+  }
+
+  // Final fallback
+  return STATIC_TEMPLATES['POS Print Format'];
 }
