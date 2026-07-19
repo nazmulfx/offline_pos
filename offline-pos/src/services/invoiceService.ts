@@ -489,12 +489,14 @@ export async function getPOSProfileData(posProfile: string): Promise<any> {
                     reader.readAsDataURL(blob);
                   });
                   companyDoc.company_logo = base64Data;
+                  localStorage.setItem('cached_company_logo', base64Data);
                 }
               } catch (logoErr) {
                 console.warn('[InvoiceService] Failed to base64 encode company logo:', logoErr);
               }
             }
             await cachePrintFormat('Company_Doc', companyDoc);
+            localStorage.setItem('cached_company_doc', JSON.stringify(companyDoc));
           }
         } catch (compErr) {
           console.warn('[InvoiceService] Failed to fetch/cache Company doc:', compErr);
@@ -529,6 +531,7 @@ export async function getPOSProfileData(posProfile: string): Promise<any> {
             });
             if (addressDoc) {
               await cachePrintFormat('Address_Doc', addressDoc);
+              localStorage.setItem('cached_address_doc', JSON.stringify(addressDoc));
             }
           }
         } catch (addrErr) {
@@ -831,12 +834,21 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
   // Render using cached HTML print format layout if available
   if (pfData && pfData.html) {
     try {
-      // 1. Fetch Company doc and Company Address doc from IndexedDB
+      // 1. Fetch Company doc and Company Address doc from IndexedDB (with localStorage fallbacks)
       let cachedCompanyDoc: any = null;
       let cachedAddressDoc: any = null;
       try {
         cachedCompanyDoc = await getCachedPrintFormat('Company_Doc');
+        if (!cachedCompanyDoc) {
+          const localComp = localStorage.getItem('cached_company_doc');
+          if (localComp) cachedCompanyDoc = JSON.parse(localComp);
+        }
+
         cachedAddressDoc = await getCachedPrintFormat('Address_Doc');
+        if (!cachedAddressDoc) {
+          const localAddr = localStorage.getItem('cached_address_doc');
+          if (localAddr) cachedAddressDoc = JSON.parse(localAddr);
+        }
       } catch (e) {
         console.warn('[printInvoiceOffline] Error loading cached Company/Address doc:', e);
       }
