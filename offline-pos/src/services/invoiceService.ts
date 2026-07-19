@@ -41,7 +41,8 @@ function uuidv4(): string {
   });
 }
 
-function generateOfflineId(posProfile: string): string {
+function generateOfflineId(posProfile: string, isOnline: boolean): string {
+  const prefix = isOnline ? 'online' : 'offline';
   const profileClean = (posProfile || 'DEFAULT').replace(/[^a-zA-Z0-9]/g, '');
   const cookies = Object.fromEntries(
     document.cookie.split('; ').filter(Boolean).map((part) => {
@@ -52,7 +53,7 @@ function generateOfflineId(posProfile: string): string {
   const userClean = (cookies.user_id || 'Guest').replace(/[^a-zA-Z0-9]/g, '');
   const timestamp = Date.now();
   const uuid = uuidv4();
-  return `Offline-${profileClean}-${userClean}-${timestamp}-${uuid}`;
+  return `${prefix}-${profileClean}-${userClean}-${timestamp}-${uuid}`;
 }
 
 function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
@@ -63,6 +64,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     payments,
     discount = 0,
     additionalDiscount = 0,
+    isOnline,
   } = payload;
 
   const isPOSInvoice = session.invoice_type === 'POS Invoice';
@@ -121,7 +123,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     customer: customer.name,
     customer_name: customer.customer_name || customer.name || '',
     set_warehouse: session.warehouse,
-    custom_offline_id: generateOfflineId(session.pos_profile),
+    custom_offline_id: generateOfflineId(session.pos_profile, isOnline),
     currency: session.currency,
     selling_price_list: session.price_list,
     posting_date: today(),
