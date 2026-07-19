@@ -1,28 +1,21 @@
 import frappe
-from erpnext.stock.get_item_details import _get_item_tax_template, get_item_tax_map
+from offline_pos.api import get_print_format_template
 
 def test():
-    item_doc = frappe.get_cached_doc("Item", "SKU001")
-    company = "Nazmul Inc. (Demo)"
-    ctx = frappe._dict({
-        "company": company,
-        "posting_date": frappe.utils.today(),
-    })
+    res = get_print_format_template("Standard Print format")
+    html = res["html"]
+    start_idx = html.find("___MODE_OF_PAYMENT___")
+    if start_idx != -1:
+        print("Payments segment in HTML:")
+        print(html[start_idx-200 : start_idx+300])
+    else:
+        print("___MODE_OF_PAYMENT___ not found in Standard Print format!")
 
-    item_tax_template = None
-    if item_doc.taxes:
-        item_tax_template = _get_item_tax_template(ctx, item_doc.taxes)
-
-    if not item_tax_template:
-        item_group = item_doc.item_group
-        while item_group and not item_tax_template:
-            item_group_doc = frappe.get_cached_doc("Item Group", item_group)
-            item_tax_template = _get_item_tax_template(ctx, item_group_doc.taxes)
-            item_group = item_group_doc.parent_item_group
-
-    item_tax_rate = "{}"
-    if item_tax_template:
-        item_tax_rate = get_item_tax_map(doc=ctx, tax_template=item_tax_template, as_json=True)
-
-    print("item_tax_template:", item_tax_template)
-    print("item_tax_rate:", item_tax_rate)
+    res2 = get_print_format_template("POS Invoice with Due Feature")
+    html2 = res2["html"]
+    start_idx2 = html2.find("___MODE_OF_PAYMENT___")
+    if start_idx2 != -1:
+        print("Payments segment in POS Invoice with Due Feature:")
+        print(html2[start_idx2-200 : start_idx2+300])
+    else:
+        print("___MODE_OF_PAYMENT___ not found in POS Invoice with Due Feature!")

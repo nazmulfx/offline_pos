@@ -119,6 +119,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     pos_profile: session.pos_profile,
     company: session.company,
     customer: customer.name,
+    customer_name: customer.customer_name || customer.name || '',
     set_warehouse: session.warehouse,
     custom_offline_id: generateOfflineId(session.pos_profile),
     currency: session.currency,
@@ -147,7 +148,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
           item_tax_template: item.item_tax_template || null,
           item_tax_rate: typeof item.item_tax_rate === 'object' ? JSON.stringify(item.item_tax_rate) : (item.item_tax_rate || '{}')
         } : {}),
-        ...(item.conversion_factor ? { conversion_factor: item.conversion_factor } : {}),
+        conversion_factor: item.conversion_factor || 1,
       };
 
       if (item.allocations && item.allocations.length > 0) {
@@ -163,6 +164,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
             rate,
             price_list_rate,
             discount_amount,
+            amount: qty * rate,
             use_serial_batch_fields: (item.has_batch_no || item.has_serial_no) ? 1 : 0,
             ...(alloc.batch_no ? { batch_no: alloc.batch_no } : {}),
             ...(alloc.serial_no ? { serial_no: alloc.serial_no } : {}),
@@ -181,6 +183,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
           rate,
           price_list_rate,
           discount_amount,
+          amount: item.qty * rate,
           use_serial_batch_fields: (item.has_batch_no || item.has_serial_no) ? 1 : 0,
           ...(item.batch_no ? { batch_no: item.batch_no } : {}),
           ...(item.serial_no ? { serial_no: item.serial_no } : {}),
