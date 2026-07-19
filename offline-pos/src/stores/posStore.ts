@@ -214,7 +214,7 @@ export const usePOSStore = defineStore('pos', () => {
         });
         const balance = (result && result.length > 0) ? (parseFloat(result[0].party_current_balance) || 0) : 0;
         
-        // Cache in IndexedDB
+        // Cache in IndexedDB and localStorage
         await cachePartyBalance({
           id: `${company}-${partyType}-${customerName}`,
           company,
@@ -222,12 +222,13 @@ export const usePOSStore = defineStore('pos', () => {
           party: customerName,
           party_current_balance: balance,
         });
+        localStorage.setItem(`cached_balance_${company}_${customerName}`, balance.toString());
 
         if (selectedCustomer.value?.name === customerName) {
           selectedCustomerBalance.value = balance;
         }
       } catch (err) {
-        console.warn('[POSStore] Failed to fetch customer balance from server, falling back to IndexedDB:', err);
+        console.warn('[POSStore] Failed to fetch customer balance from server, falling back to IndexedDB/localStorage:', err);
         await loadCustomerBalanceFromOffline(company, partyType, customerName);
       }
     } else {
@@ -238,14 +239,20 @@ export const usePOSStore = defineStore('pos', () => {
   async function loadCustomerBalanceFromOffline(company: string, partyType: string, customerName: string) {
     try {
       const cached = await getCachedPartyBalance(company, partyType, customerName);
-      const balance = cached ? cached.party_current_balance : 0;
+      let balance = cached ? cached.party_current_balance : null;
+      if (balance === null) {
+        const localBal = localStorage.getItem(`cached_balance_${company}_${customerName}`);
+        balance = localBal ? parseFloat(localBal) : 0;
+      }
       if (selectedCustomer.value?.name === customerName) {
         selectedCustomerBalance.value = balance;
       }
     } catch (err) {
       console.error('[POSStore] Failed to load cached customer balance:', err);
+      const localBal = localStorage.getItem(`cached_balance_${company}_${customerName}`);
+      const balance = localBal ? parseFloat(localBal) : 0;
       if (selectedCustomer.value?.name === customerName) {
-        selectedCustomerBalance.value = 0;
+        selectedCustomerBalance.value = balance;
       }
     }
   }
@@ -256,7 +263,11 @@ export const usePOSStore = defineStore('pos', () => {
     const partyType = 'Customer';
     try {
       const cached = await getCachedPartyBalance(company, partyType, customerName);
-      const oldBalance = cached ? cached.party_current_balance : 0;
+      let oldBalance = cached ? cached.party_current_balance : null;
+      if (oldBalance === null) {
+        const localBal = localStorage.getItem(`cached_balance_${company}_${customerName}`);
+        oldBalance = localBal ? parseFloat(localBal) : 0;
+      }
       const newBalance = oldBalance + delta;
       
       await cachePartyBalance({
@@ -266,6 +277,7 @@ export const usePOSStore = defineStore('pos', () => {
         party: customerName,
         party_current_balance: newBalance,
       });
+      localStorage.setItem(`cached_balance_${company}_${customerName}`, newBalance.toString());
 
       if (selectedCustomer.value?.name === customerName) {
         selectedCustomerBalance.value = newBalance;

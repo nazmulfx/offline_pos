@@ -788,16 +788,21 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
   const grandTotal = doc.grand_total || 0;
   const paidAmount = (doc.paid_amount !== undefined && doc.paid_amount !== null) ? doc.paid_amount : grandTotal;
 
-  // Retrieve cached outstanding balance for customer from IndexedDB
+  // Retrieve cached outstanding balance for customer from IndexedDB (with localStorage fallback)
   let prevOutstandingVal = 0;
   if (customer && company) {
     try {
       const balanceRec = await getCachedPartyBalance(company, 'Customer', customer);
       if (balanceRec) {
         prevOutstandingVal = balanceRec.party_current_balance || 0;
+      } else {
+        const localBal = localStorage.getItem(`cached_balance_${company}_${customer}`);
+        if (localBal) prevOutstandingVal = parseFloat(localBal) || 0;
       }
     } catch (e) {
       console.warn('[printInvoiceOffline] Failed to get cached party balance:', e);
+      const localBal = localStorage.getItem(`cached_balance_${company}_${customer}`);
+      if (localBal) prevOutstandingVal = parseFloat(localBal) || 0;
     }
   }
 
@@ -902,7 +907,12 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
 
       env.addGlobal('_', (str: string) => str);
       env.addFilter('_', (str: string) => str);
-      env.addGlobal('get_customer_outstanding', (cust: string, comp: string) => prevOutstandingVal);
+      env.addGlobal('get_customer_outstanding', (cust: string, comp: string) => {
+        if (doc.docstatus === 1) {
+          return prevOutstandingVal;
+        }
+        return prevOutstandingVal - (grandTotal - paidAmount);
+      });
       env.addGlobal('letter_head', '');
 
       const frappeMock = {
