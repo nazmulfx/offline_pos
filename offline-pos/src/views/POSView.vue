@@ -230,7 +230,7 @@
             >
               <span class="btn-icon">🧾</span>
               <span class="btn-title">POS Receipt</span>
-              <span class="btn-subtitle">Format: {{ printChoiceOffline ? (pos.session?.offline_pos_print_format || 'POS print format') : (pos.session?.pos_print_format || 'POS print format') }}</span>
+              <span class="btn-subtitle">Format: {{ pos.session?.pos_print_format || 'POS print format' }}</span>
             </button>
             <button 
               class="pos-print-choice-btn pos-print-choice-btn--standard"
@@ -238,7 +238,7 @@
             >
               <span class="btn-icon">📄</span>
               <span class="btn-title">Standard Invoice</span>
-              <span class="btn-subtitle">Format: {{ printChoiceOffline ? (pos.session?.custom_offline_standard_print_format || 'Standard print format') : (pos.session?.standard_print_format || 'Standard print format') }}</span>
+              <span class="btn-subtitle">Format: {{ pos.session?.standard_print_format || 'Standard print format' }}</span>
             </button>
           </div>
           <div class="pos-print-choice-footer">
@@ -435,8 +435,6 @@ onMounted(() => {
         pos.session.apply_discount_on = profileData.apply_discount_on || 'Grand Total';
         pos.session.pos_print_format = profileData.pos_print_format || '';
         pos.session.standard_print_format = profileData.standard_print_format || '';
-        pos.session.offline_pos_print_format = profileData.offline_pos_print_format || '';
-        pos.session.custom_offline_standard_print_format = profileData.custom_offline_standard_print_format || '';
         pos.session.print_mode = profileData.print_mode || 'POS';
         pos.session.print_receipt_on_order_complete = profileData.print_receipt_on_order_complete ? 1 : 0;
         pos.session.open_print_dialogue_on_invoice_creation = profileData.open_print_dialogue_on_invoice_creation ? 1 : 0;
@@ -573,11 +571,8 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
   const printFormat = formatType === 'Standard'
     ? (pos.session?.standard_print_format || 'Standard')
     : (pos.session?.pos_print_format || '');
-  const offlinePrintFormat = formatType === 'Standard'
-    ? (pos.session?.custom_offline_standard_print_format || 'Standard')
-    : (pos.session?.offline_pos_print_format || printFormat);
 
-  const pfData = doc ? await resolvePrintFormat(offlinePrintFormat) : null;
+  const pfData = doc ? await resolvePrintFormat(printFormat) : null;
 
   const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
   const openDialogue = pos.session?.open_print_dialogue_on_invoice_creation === 1;

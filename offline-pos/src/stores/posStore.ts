@@ -86,8 +86,6 @@ export interface POSSession {
   hide_images?: number;
   pos_print_format?: string;
   standard_print_format?: string;
-  offline_pos_print_format?: string;
-  custom_offline_standard_print_format?: string;
   print_mode?: string;
   print_receipt_on_order_complete?: number;
   open_print_dialogue_on_invoice_creation?: number;

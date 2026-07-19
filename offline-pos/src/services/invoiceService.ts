@@ -16,11 +16,18 @@ import {
 } from '../db/posDB';
 import type { CartItem, Customer, POSSession } from '../stores/posStore';
 import { formatNumber, formatCurrency as formatWithCurrencySymbol } from '../lib/currency';
+import nunjucks from 'nunjucks';
 
 import posPrintFormat from '../print_templates/pos_print_format.json';
 import standardPrintFormat from '../print_templates/standard_print_format.json';
-import offlinePosPrintFormat from '../print_templates/offline_pos_print_format.json';
-import offlineStandardPrintFormat from '../print_templates/offline_standard_print_format.json';
+
+if (!(String.prototype as any).format) {
+  (String.prototype as any).format = function(this: string, ...args: any[]) {
+    return this.replace(/{(\d+)}/g, (match, number) => {
+      return typeof args[number] !== 'undefined' ? args[number] : match;
+    });
+  };
+}
 
 interface CreateInvoicePayload {
   session: POSSession;
@@ -135,6 +142,7 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
     company: session.company,
     customer: customer.name,
     customer_name: customer.customer_name || customer.name || '',
+    contact_mobile: customer.mobile_no || '',
     set_warehouse: session.warehouse,
     custom_offline_id: generateOfflineId(session.pos_profile, isOnline),
     currency: session.currency,
@@ -345,17 +353,60 @@ export async function submitInvoice(payload: CreateInvoicePayload): Promise<{
 // ─── POS Session Helpers ─────────────────────────────────────────────────────
 
 async function cachePrintStylesheets(htmlText?: string) {
-  // 1. Static fallback defaults
+  // 1. Resolve actual hashed URLs from assets.json manifest
+  let printBundleUrl = '/assets/frappe/dist/css/print.bundle.css';
+  let printFormatBundleUrl = '/assets/frappe/dist/css/print_format.bundle.css';
+  let erpnextBundleUrl = '/assets/erpnext/dist/css/erpnext.bundle.css';
+
+  try {
+    const assetsResp = await fetch('/assets/assets.json');
+    if (assetsResp.ok) {
+      const assets = await assetsResp.json();
+      if (assets['print.bundle.css']) {
+        printBundleUrl = assets['print.bundle.css'];
+      }
+      if (assets['print_format.bundle.css']) {
+        printFormatBundleUrl = assets['print_format.bundle.css'];
+      }
+      if (assets['erpnext.bundle.css']) {
+        erpnextBundleUrl = assets['erpnext.bundle.css'];
+      }
+    }
+  } catch (err) {
+    console.warn('[PrintStyles] Failed to load assets.json manifest:', err);
+  }
+
   const stylesToCache = [
-    '/assets/frappe/css/bootstrap.css',
-    '/assets/frappe/css/printview.css',
+    printBundleUrl,
+    printFormatBundleUrl,
+    erpnextBundleUrl,
   ];
+
   for (const url of stylesToCache) {
     try {
       const resp = await fetch(url);
       if (resp.ok) {
         const cssText = await resp.text();
         localStorage.setItem(`cached_css_${url}`, cssText);
+        
+        // Also cache under clean unhashed names for absolute fallback robustness
+        const basename = url.split('/').pop() || '';
+        localStorage.setItem(`cached_css_${basename}`, cssText);
+
+        if (url.includes('print.bundle')) {
+          localStorage.setItem('cached_css_/assets/frappe/dist/css/print.bundle.css', cssText);
+          localStorage.setItem('cached_css_print.bundle.css', cssText);
+          localStorage.setItem('cached_css_/assets/frappe/css/bootstrap.css', cssText);
+          localStorage.setItem('cached_css_bootstrap.css', cssText);
+        } else if (url.includes('print_format.bundle')) {
+          localStorage.setItem('cached_css_/assets/frappe/dist/css/print_format.bundle.css', cssText);
+          localStorage.setItem('cached_css_print_format.bundle.css', cssText);
+          localStorage.setItem('cached_css_/assets/frappe/css/printview.css', cssText);
+          localStorage.setItem('cached_css_printview.css', cssText);
+        } else if (url.includes('erpnext.bundle')) {
+          localStorage.setItem('cached_css_/assets/erpnext/dist/css/erpnext.bundle.css', cssText);
+          localStorage.setItem('cached_css_erpnext.bundle.css', cssText);
+        }
       }
     } catch (e) {
       console.warn('[PrintStyles] Failed to cache fallback CSS:', url, e);
@@ -415,6 +466,76 @@ export async function getPOSProfileData(posProfile: string): Promise<any> {
       }
       await cachePOSProfile(data);
 
+      if (data.company) {
+        try {
+          const companyDoc = await call('frappe.client.get', {
+            doctype: 'Company',
+            name: data.company
+          });
+          if (companyDoc) {
+            // Convert company_logo to Base64 data URL for offline rendering
+            if (companyDoc.company_logo) {
+              try {
+                const logoUrl = companyDoc.company_logo.startsWith('http')
+                  ? companyDoc.company_logo
+                  : `${window.location.origin}${companyDoc.company_logo}`;
+                const imgResp = await fetch(logoUrl);
+                if (imgResp.ok) {
+                  const blob = await imgResp.blob();
+                  const base64Data = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                  });
+                  companyDoc.company_logo = base64Data;
+                }
+              } catch (logoErr) {
+                console.warn('[InvoiceService] Failed to base64 encode company logo:', logoErr);
+              }
+            }
+            await cachePrintFormat('Company_Doc', companyDoc);
+          }
+        } catch (compErr) {
+          console.warn('[InvoiceService] Failed to fetch/cache Company doc:', compErr);
+        }
+
+        try {
+          let addressName: any = await call('frappe.client.get_value', {
+            doctype: 'Address',
+            filters: { is_your_company_address: 1 },
+            fieldname: 'name'
+          });
+          if (addressName && typeof addressName === 'object') {
+            addressName = addressName.name || addressName.message;
+          }
+          if (!addressName) {
+            addressName = await call('frappe.client.get_value', {
+              doctype: 'Address',
+              filters: {
+                'links.link_doctype': 'Company',
+                'links.link_name': data.company
+              },
+              fieldname: 'name'
+            });
+            if (addressName && typeof addressName === 'object') {
+              addressName = addressName.name || addressName.message;
+            }
+          }
+          if (addressName) {
+            const addressDoc = await call('frappe.client.get', {
+              doctype: 'Address',
+              name: addressName
+            });
+            if (addressDoc) {
+              await cachePrintFormat('Address_Doc', addressDoc);
+            }
+          }
+        } catch (addrErr) {
+          console.warn('[InvoiceService] Failed to fetch/cache Company Address doc:', addrErr);
+        }
+      }
+
       if (data.pos_print_format) {
         try {
           const pfData = await call(
@@ -446,38 +567,6 @@ export async function getPOSProfileData(posProfile: string): Promise<any> {
           }
         } catch (pfErr) {
           console.warn('[InvoiceService] Failed to cache standard_print_format template:', pfErr);
-        }
-      }
-
-      if (data.offline_pos_print_format) {
-        try {
-          const pfData = await call(
-            'offline_pos.api.get_print_format_template',
-            { print_format: data.offline_pos_print_format, doctype: 'POS Invoice' }
-          );
-          if (pfData) {
-            localStorage.setItem(`print_format_${data.offline_pos_print_format}`, JSON.stringify(pfData));
-            await cachePrintFormat(data.offline_pos_print_format, pfData);
-            await cachePrintStylesheets(pfData.html);
-          }
-        } catch (pfErr) {
-          console.warn('[InvoiceService] Failed to cache offline_pos_print_format template:', pfErr);
-        }
-      }
-
-      if (data.custom_offline_standard_print_format) {
-        try {
-          const pfData = await call(
-            'offline_pos.api.get_print_format_template',
-            { print_format: data.custom_offline_standard_print_format, doctype: 'POS Invoice' }
-          );
-          if (pfData) {
-            localStorage.setItem(`print_format_${data.custom_offline_standard_print_format}`, JSON.stringify(pfData));
-            await cachePrintFormat(data.custom_offline_standard_print_format, pfData);
-            await cachePrintStylesheets(pfData.html);
-          }
-        } catch (pfErr) {
-          console.warn('[InvoiceService] Failed to cache custom_offline_standard_print_format template:', pfErr);
         }
       }
     }
@@ -601,6 +690,56 @@ function numberToWords(amount: number, currencyCode: string = 'NGN'): string {
   return words ? words + " Only" : "";
 }
 
+function wrapDocForJinja(originalDoc: any, currencyCode: string) {
+  const wrapped = { ...originalDoc };
+
+  const getFormattedValue = (val: any) => {
+    if (typeof val === 'number') {
+      return formatWithCurrencySymbol(val, currencyCode);
+    }
+    return val !== undefined && val !== null ? String(val) : '';
+  };
+
+  wrapped.get_formatted = function(fieldname: string) {
+    return getFormattedValue(this[fieldname]);
+  };
+
+  if (Array.isArray(wrapped.items)) {
+    wrapped.items = wrapped.items.map((item: any, idx: number) => {
+      const wrappedItem = { 
+        ...item, 
+        idx: idx + 1
+      };
+      wrappedItem.get_formatted = function(fieldname: string) {
+        return getFormattedValue(this[fieldname]);
+      };
+      return wrappedItem;
+    });
+  }
+
+  if (Array.isArray(wrapped.taxes)) {
+    wrapped.taxes = wrapped.taxes.map((tax: any) => {
+      const wrappedTax = { ...tax };
+      wrappedTax.get_formatted = function(fieldname: string) {
+        return getFormattedValue(this[fieldname]);
+      };
+      return wrappedTax;
+    });
+  }
+
+  if (Array.isArray(wrapped.payments)) {
+    wrapped.payments = wrapped.payments.map((payment: any) => {
+      const wrappedPayment = { ...payment };
+      wrappedPayment.get_formatted = function(fieldname: string) {
+        return getFormattedValue(this[fieldname]);
+      };
+      return wrappedPayment;
+    });
+  }
+
+  return wrapped;
+}
+
 export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Window | null, useIframe: boolean = false) {
   let printWindow: Window | null = null;
   let printIframe: HTMLIFrameElement | null = null;
@@ -630,7 +769,7 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
   const targetDocument = targetWindow.document;
 
   const company = doc.company || '';
-  const name = doc.name || doc.invoiceName || '';
+  const name = doc.name || doc.invoiceName || doc.custom_offline_id || '';
   const date = doc.posting_date || new Date().toISOString().split('T')[0];
   const time = doc.posting_time || new Date().toLocaleTimeString('en-US', { hour12: false });
   const customer = doc.customer || '';
@@ -692,118 +831,193 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
   // Render using cached HTML print format layout if available
   if (pfData && pfData.html) {
     try {
+      // 1. Fetch Company doc and Company Address doc from IndexedDB
+      let cachedCompanyDoc: any = null;
+      let cachedAddressDoc: any = null;
+      try {
+        cachedCompanyDoc = await getCachedPrintFormat('Company_Doc');
+        cachedAddressDoc = await getCachedPrintFormat('Address_Doc');
+      } catch (e) {
+        console.warn('[printInvoiceOffline] Error loading cached Company/Address doc:', e);
+      }
+      if (!cachedCompanyDoc) {
+        cachedCompanyDoc = {
+          name: company,
+          company_logo: '',
+          tax_id: '',
+          phone_no: '',
+          email: ''
+        };
+      }
+      if (!cachedAddressDoc) {
+        cachedAddressDoc = {
+          address_line1: '',
+          address_line2: '',
+          city: '',
+          country: ''
+        };
+      }
+
+      // 2. Prepare rendering context
+      const renderingDoc = wrapDocForJinja({
+        ...doc,
+        company,
+        name,
+        posting_date: date,
+        posting_time: time,
+        customer,
+        customer_name: customerName,
+        net_total: subtotal,
+        total: subtotal,
+        grand_total: grandTotal,
+        paid_amount: paidAmount,
+        discount_amount: discount,
+        outstanding_amount: invoiceOutstanding,
+        rounded_total: grandTotal,
+        total_qty: items.reduce((sum: number, item: any) => sum + (item.qty || 0), 0),
+        in_words: numberToWords(grandTotal, docCurrency),
+        currency: docCurrency,
+        custom_prev_outstanding: previousOutstanding,
+        custom_total_due: totalDue,
+        custom_curr_due: currentDue,
+        company_address: doc.company_address || (cachedAddressDoc ? cachedAddressDoc.name : 'Address_Doc'),
+        customer_address: doc.customer_address || 'Customer_Address_Doc',
+        owner: doc.owner || localStorage.getItem('user_id') || 'Guest',
+      }, docCurrency);
+
+      // 3. Initialize Nunjucks environment with autoescaping disabled
+      const env = new nunjucks.Environment(null, { autoescape: false });
+
+      env.addGlobal('_', (str: string) => str);
+      env.addFilter('_', (str: string) => str);
+      env.addGlobal('get_customer_outstanding', (cust: string, comp: string) => prevOutstandingVal);
+      env.addGlobal('letter_head', '');
+
+      const frappeMock = {
+        format: (val: any, options: any) => {
+          if (options && (options === 'Currency' || options.fieldtype === 'Currency')) {
+            return formatWithCurrencySymbol(val, docCurrency);
+          }
+          return String(val);
+        },
+        get_doc: (doctype: string, docname: string) => {
+          if (doctype === 'Company') return cachedCompanyDoc;
+          if (doctype === 'Address') {
+            if (docname === renderingDoc.company_address || docname === 'Address_Doc' || docname === cachedAddressDoc.name) {
+              return cachedAddressDoc;
+            }
+            return {
+              address_line1: '',
+              address_line2: '',
+              city: '',
+              country: ''
+            };
+          }
+          return {};
+        },
+        utils: {
+          now_datetime: () => {
+            const now = new Date();
+            return {
+              strftime: (fmt: string) => {
+                const d = String(now.getDate()).padStart(2, '0');
+                const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                const b = monthNames[now.getMonth()];
+                const y = String(now.getFullYear()).slice(-2);
+                const hours = now.getHours();
+                const ampm = hours >= 12 ? 'PM' : 'AM';
+                const formattedHours = String(hours % 12 || 12).padStart(2, '0');
+                const M = String(now.getMinutes()).padStart(2, '0');
+                return fmt
+                  .replace('%d', d)
+                  .replace('%b', b)
+                  .replace('%y', y)
+                  .replace('%I', formattedHours)
+                  .replace('%M', M)
+                  .replace('%p', ampm);
+              }
+            };
+          }
+        }
+      };
+      env.addGlobal('frappe', frappeMock);
+
+      // Preprocess template to make Python Jinja syntax compatible with Nunjucks:
+      let templateHtml = pfData.html || '';
+
+      // 1. Preprocess inline if-else inside {% set var = expr1 if cond else expr2 %}
+      // Regex: {%\s*set\s+(\w+)\s*=\s*(.*?)\s+if\s+(.*?)\s+else\s+(.*?)\s*%}
+      templateHtml = templateHtml.replace(/\{%\s*set\s+(\w+)\s*=\s*(.*?)\s+if\s+(.*?)\s+else\s+(.*?)\s*%\}/g, (match, variable, expr1, cond, expr2) => {
+        return `{% if ${cond} %}{% set ${variable} = ${expr1} %}{% else %}{% set ${variable} = ${expr2} %}{% endif %}`;
+      });
+
+      // 2. Replace Python Jinja concatenation `~` with `+` inside {{ ... }} and {% ... %}
+      templateHtml = templateHtml.replace(/(\{\{[^}]*\}\}|\{\%[^%]*\%\})/g, (match) => {
+        return match.replace(/~/g, '+');
+      });
+
+      // 4. Render Nunjucks template
+      let renderedHtml = '';
+      try {
+        renderedHtml = env.renderString(templateHtml, { doc: renderingDoc });
+      } catch (renderErr) {
+        console.warn('[printInvoiceOffline] Nunjucks rendering failed, falling back to raw html:', renderErr);
+        renderedHtml = pfData.html;
+      }
+
+      // Parse the HTML DOM to perform inline stylesheet replacement
       const parser = new DOMParser();
-      const docDom = parser.parseFromString(pfData.html, 'text/html');
+      const docDom = parser.parseFromString(renderedHtml, 'text/html');
 
-      // 1. Walk the tree to locate the item row placeholder ___ITEM_NAME___
-      const walker = docDom.createTreeWalker(docDom.body, NodeFilter.SHOW_TEXT);
-      let itemRow: HTMLElement | null = null;
-      let node: Node | null;
-      while (node = walker.nextNode()) {
-        if (node.nodeValue && node.nodeValue.includes('___ITEM_NAME___')) {
-          let parent = node.parentElement;
-          while (parent) {
-            if (
-              parent.tagName === 'TR' ||
-              parent.tagName === 'LI' ||
-              parent.classList.contains('row') ||
-              parent.classList.contains('print-format-row')
-            ) {
-              break;
-            }
-            if (parent.tagName === 'BODY' || parent.id === 'print-format') {
-              break;
-            }
-            parent = parent.parentElement;
-          }
-          itemRow = parent;
-          break;
+      // Ensure base tag is injected into head to resolve relative assets (e.g. logo images)
+      let baseTag = docDom.querySelector('base');
+      if (!baseTag) {
+        baseTag = docDom.createElement('base');
+        baseTag.setAttribute('href', window.location.origin);
+        if (docDom.head) {
+          docDom.head.insertBefore(baseTag, docDom.head.firstChild);
         }
       }
 
-      if (itemRow && itemRow.parentElement) {
-        const parentContainer = itemRow.parentElement;
-        const rowTemplate = itemRow.cloneNode(true) as HTMLElement;
-        const nextSibling = itemRow.nextSibling;
-        
-        // Remove template placeholder row
-        itemRow.remove();
-
-        // Multiply rows for each item in the cart
-        items.forEach((item: any) => {
-          const newRow = rowTemplate.cloneNode(true) as HTMLElement;
-          let rowHtml = newRow.innerHTML;
-          
-          rowHtml = rowHtml.replace(/___ITEM_NAME___/g, item.item_name || '');
-          rowHtml = rowHtml.replace(/___ITEM_CODE___/g, item.item_code || '');
-          rowHtml = rowHtml.replace(/___ITEM_UOM___/g, item.uom || '');
-          rowHtml = rowHtml.replace(/88888\.88/g, String(item.conversion_factor || 1));
-          rowHtml = rowHtml.replace(/999\.99/g, String(item.qty));
-          rowHtml = rowHtml.replace(/999,?111\.11/g, formatCurrency(item.rate));
-          rowHtml = rowHtml.replace(/999,?222\.22/g, formatCurrency(item.qty * item.rate));
-          
-          newRow.innerHTML = rowHtml;
-          if (nextSibling) {
-            parentContainer.insertBefore(newRow, nextSibling);
-          } else {
-            parentContainer.appendChild(newRow);
-          }
-        });
+      // If there is no .print-format wrapper, wrap body contents
+      if (!docDom.querySelector('.print-format')) {
+        const bodyContent = docDom.body.innerHTML;
+        docDom.body.innerHTML = `
+          <div class="print-format-container">
+            <div class="print-format">
+              ${bodyContent}
+            </div>
+          </div>
+        `;
       }
 
-      // 1b. Walk the tree to locate the payment row placeholder ___MODE_OF_PAYMENT___
-      const pWalker = docDom.createTreeWalker(docDom.body, NodeFilter.SHOW_TEXT);
-      let paymentRow: HTMLElement | null = null;
-      let pNode: Node | null;
-      while (pNode = pWalker.nextNode()) {
-        if (pNode.nodeValue && pNode.nodeValue.includes('___MODE_OF_PAYMENT___')) {
-          let parent = pNode.parentElement;
-          while (parent) {
-            if (
-              parent.tagName === 'TR' ||
-              parent.tagName === 'LI' ||
-              parent.classList.contains('row') ||
-              parent.classList.contains('print-format-row')
-            ) {
-              break;
-            }
-            if (parent.tagName === 'BODY' || parent.id === 'print-format') {
-              break;
-            }
-            parent = parent.parentElement;
-          }
-          paymentRow = parent;
-          break;
+      // Ensure standard stylesheets are injected into head
+      const standardStylesheets = [
+        '/assets/frappe/dist/css/print.bundle.css',
+        '/assets/frappe/dist/css/print_format.bundle.css',
+        '/assets/erpnext/dist/css/erpnext.bundle.css',
+        '/assets/frappe/css/bootstrap.css',
+        '/assets/frappe/css/printview.css'
+      ];
+      standardStylesheets.forEach((url) => {
+        const cachedCss = localStorage.getItem(`cached_css_${url}`);
+        if (cachedCss) {
+          const styleTag = docDom.createElement('style');
+          styleTag.setAttribute('data-source', url);
+          styleTag.textContent = cachedCss;
+          docDom.head.appendChild(styleTag);
         }
+      });
+
+      // Inject custom format CSS if available
+      if (pfData.css) {
+        const customStyle = docDom.createElement('style');
+        customStyle.setAttribute('data-source', 'custom-css');
+        customStyle.textContent = pfData.css;
+        docDom.head.appendChild(customStyle);
       }
 
-      if (paymentRow && paymentRow.parentElement) {
-        const parentContainer = paymentRow.parentElement;
-        const rowTemplate = paymentRow.cloneNode(true) as HTMLElement;
-        const nextSibling = paymentRow.nextSibling;
-        
-        // Remove template placeholder row
-        paymentRow.remove();
-
-        // Multiply rows for each payment with amount > 0
-        const paymentsList = (doc.payments || []).filter((p: any) => (p.amount || 0) > 0);
-        paymentsList.forEach((pay: any) => {
-          const newRow = rowTemplate.cloneNode(true) as HTMLElement;
-          let rowHtml = newRow.innerHTML;
-          
-          rowHtml = rowHtml.replace(/___MODE_OF_PAYMENT___/g, pay.mode_of_payment || '');
-          rowHtml = rowHtml.replace(/999,?777\.77/g, formatCurrency(pay.amount || 0));
-          
-          newRow.innerHTML = rowHtml;
-          if (nextSibling) {
-            parentContainer.insertBefore(newRow, nextSibling);
-          } else {
-            parentContainer.appendChild(newRow);
-          }
-        });
-      }
-
-      // Replace linked CSS stylesheets with inline styles
+      // Inline cached stylesheets from links (if any exist in the template HTML)
       const links = docDom.querySelectorAll('link[rel="stylesheet"]');
       links.forEach((link: any) => {
         const href = link.getAttribute('href');
@@ -826,35 +1040,9 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
         }
       });
 
-      // 2. Perform global string replacements
       let finalHtml = docDom.documentElement.outerHTML;
-      finalHtml = finalHtml.replace(/___INV_NAME___/g, name);
-      finalHtml = finalHtml.replace(/___COMPANY___/g, company);
-      finalHtml = finalHtml.replace(/___CUSTOMER_NAME___/g, customerName);
-      finalHtml = finalHtml.replace(/___CUSTOMER___/g, customer);
-      
-      const dateRegex = /(1999[-/.]09[-/.]09)|(09[-/.]09[-/.]1999)|(Sep(tember)?\s+9,?\s+1999)|(9\s+Sep(tember)?\s+1999)/gi;
-      finalHtml = finalHtml.replace(dateRegex, date);
 
-      const timeRegex = /09:09(:09)?(\s*[AP]M)?/gi;
-      finalHtml = finalHtml.replace(timeRegex, time);
-      
-      finalHtml = finalHtml.replace(/999,?333\.33/g, formatCurrency(subtotal));
-      finalHtml = finalHtml.replace(/999,?444\.44/g, formatCurrency(discount));
-      finalHtml = finalHtml.replace(/999,?555\.55/g, formatCurrency(grandTotal));
-      finalHtml = finalHtml.replace(/999,?666\.66/g, formatCurrency(paidAmount));
-      
-      finalHtml = finalHtml.replace(/___PREV_OUTSTANDING___/g, formatWithCurrencySymbol(previousOutstanding, docCurrency));
-      finalHtml = finalHtml.replace(/___TOTAL_DUE___/g, formatWithCurrencySymbol(totalDue, docCurrency));
-      finalHtml = finalHtml.replace(/___CURR_DUE___/g, formatWithCurrencySymbol(currentDue, docCurrency));
-
-      const totalQty = items.reduce((sum: number, item: any) => sum + (item.qty || 0), 0);
-      finalHtml = finalHtml.replace(/9999\.99/g, String(totalQty));
-
-      const inWords = numberToWords(grandTotal, docCurrency);
-      finalHtml = finalHtml.replace(/___IN_WORDS___/g, inWords);
-
-      // 3. Ensure automatic print triggering
+      // 5. Ensure automatic print triggering script is injected
       const closeScript = useIframe ? `
         <script>
           function doPrint() {
@@ -1090,8 +1278,6 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
 const STATIC_TEMPLATES: Record<string, any> = {
   'POS Print Format': posPrintFormat,
   'Standard Print format': standardPrintFormat,
-  'Offline POS Print Format': offlinePosPrintFormat,
-  'Offline Standard Print Format': offlineStandardPrintFormat,
 };
 
 export async function resolvePrintFormat(formatName: string): Promise<any> {
