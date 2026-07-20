@@ -268,6 +268,23 @@ export async function submitInvoice(payload: CreateInvoicePayload): Promise<{
 }> {
   const doc = buildInvoiceDoc(payload);
 
+  // Snapshot previous outstanding balance from IndexedDB BEFORE saving offline or updating customer balance
+  if (doc.customer && doc.company && (doc.previous_outstanding === undefined || doc.previous_outstanding === null)) {
+    try {
+      const balanceRec = await getCachedPartyBalance(doc.company, 'Customer', doc.customer);
+      if (balanceRec && balanceRec.party_current_balance !== undefined && balanceRec.party_current_balance !== null) {
+        doc.previous_outstanding = balanceRec.party_current_balance;
+      } else {
+        const localBal = localStorage.getItem(`cached_balance_${doc.company}_${doc.customer}`);
+        if (localBal !== null) doc.previous_outstanding = parseFloat(localBal) || 0;
+      }
+    } catch (e) {
+      console.warn('[submitInvoice] Failed to fetch previous outstanding from IndexedDB:', e);
+      const localBal = localStorage.getItem(`cached_balance_${doc.company}_${doc.customer}`);
+      if (localBal !== null) doc.previous_outstanding = parseFloat(localBal) || 0;
+    }
+  }
+
   if (payload.isOnline) {
     try {
       // Step 1: Insert the document (applies all server-side defaults & validation)
@@ -793,17 +810,21 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
   if (customer && company) {
     try {
       const balanceRec = await getCachedPartyBalance(company, 'Customer', customer);
-      if (balanceRec) {
-        prevOutstandingVal = balanceRec.party_current_balance || 0;
+      if (balanceRec && balanceRec.party_current_balance !== undefined && balanceRec.party_current_balance !== null) {
+        prevOutstandingVal = balanceRec.party_current_balance;
       } else {
         const localBal = localStorage.getItem(`cached_balance_${company}_${customer}`);
-        if (localBal) prevOutstandingVal = parseFloat(localBal) || 0;
+        if (localBal !== null) prevOutstandingVal = parseFloat(localBal) || 0;
       }
     } catch (e) {
       console.warn('[printInvoiceOffline] Failed to get cached party balance:', e);
       const localBal = localStorage.getItem(`cached_balance_${company}_${customer}`);
-      if (localBal) prevOutstandingVal = parseFloat(localBal) || 0;
+      if (localBal !== null) prevOutstandingVal = parseFloat(localBal) || 0;
     }
+  }
+
+  if (doc.previous_outstanding === undefined || doc.previous_outstanding === null) {
+    doc.previous_outstanding = prevOutstandingVal;
   }
 
   // Calculate previous outstanding, total due, and current due
@@ -890,6 +911,7 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
         paid_amount: paidAmount,
         discount_amount: discount,
         outstanding_amount: invoiceOutstanding,
+        previous_outstanding: doc.previous_outstanding !== undefined && doc.previous_outstanding !== null ? doc.previous_outstanding : prevOutstandingVal,
         rounded_total: grandTotal,
         total_qty: items.reduce((sum: number, item: any) => sum + (item.qty || 0), 0),
         in_words: numberToWords(grandTotal, docCurrency),
@@ -908,10 +930,7 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
       env.addGlobal('_', (str: string) => str);
       env.addFilter('_', (str: string) => str);
       env.addGlobal('get_customer_outstanding', (cust: string, comp: string) => {
-        if (doc.docstatus === 1) {
-          return prevOutstandingVal;
-        }
-        return prevOutstandingVal - (grandTotal - paidAmount);
+        return prevOutstandingVal;
       });
       env.addGlobal('letter_head', '');
 
