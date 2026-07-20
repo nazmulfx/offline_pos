@@ -149,6 +149,7 @@ after_migrate = [
 doc_events = {
 	"Sales Invoice": {
 		"before_validate": "offline_pos.offline_pos.hooks_methods.sales_invoice.before_validate",
+		"before_submit": "offline_pos.offline_pos.hooks_methods.sales_invoice.before_submit"
 	},
 	"Purchase Receipt": {
 		"validate": "offline_pos.offline_pos.hooks_methods.purchase_receipt.validate",

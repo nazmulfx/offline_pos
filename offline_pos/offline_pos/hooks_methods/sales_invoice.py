@@ -3,6 +3,7 @@ import time
 import uuid
 import frappe
 
+from . utils import get_customer_outstanding
 
 def before_validate(doc, method=None):
     """
@@ -10,3 +11,6 @@ def before_validate(doc, method=None):
     """
     if doc.amended_from and doc.custom_offline_id:
         doc.custom_offline_id = ''
+
+def before_submit(doc, method=None):
+    doc.previous_outstanding = get_customer_outstanding(doc.customer, doc.company)
