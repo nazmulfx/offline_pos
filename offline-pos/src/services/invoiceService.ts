@@ -760,7 +760,7 @@ function wrapDocForJinja(originalDoc: any, currencyCode: string) {
   return wrapped;
 }
 
-export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Window | null, useIframe: boolean = false) {
+export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow?: Window | null, useIframe: boolean = false, isPOS: boolean = false) {
   let printWindow: Window | null = null;
   let printIframe: HTMLIFrameElement | null = null;
 
@@ -1056,6 +1056,48 @@ export async function printInvoiceOffline(doc: any, pfData: any, preOpenedWindow
         customStyle.setAttribute('data-source', 'custom-css');
         customStyle.textContent = pfData.css;
         docDom.head.appendChild(customStyle);
+      }
+
+      // Inject CSS override to reset margins and widths for thermal POS printing
+      const formatIsPOS = isPOS || pfData?.name?.toLowerCase().includes('pos') || !pfData?.name;
+      if (formatIsPOS) {
+        const posStyle = docDom.createElement('style');
+        posStyle.setAttribute('data-source', 'pos-print-override');
+        posStyle.textContent = `
+          @media print {
+            html, body, .print-format-container, .print-format-gutter, .print-format {
+              width: 100% !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              background: transparent !important;
+            }
+            .print-format {
+              border: none !important;
+              box-shadow: none !important;
+            }
+            /* Reset bootstrap grid and container padding/margin for small receipt width */
+            .container, .container-fluid, .row {
+              width: 100% !important;
+              max-width: 100% !important;
+              min-width: 0 !important;
+              margin: 0 !important;
+              padding: 0 !important;
+            }
+            /* Clear columns padding so table contents fill the width */
+            .col-xs-1, .col-xs-2, .col-xs-3, .col-xs-4, .col-xs-5, .col-xs-6,
+            .col-xs-7, .col-xs-8, .col-xs-9, .col-xs-10, .col-xs-11, .col-xs-12 {
+              padding-left: 0 !important;
+              padding-right: 0 !important;
+            }
+            @page {
+              size: auto;
+              margin: 0mm !important;
+            }
+          }
+        `;
+        docDom.head.appendChild(posStyle);
       }
 
       // Inline cached stylesheets from links (if any exist in the template HTML)

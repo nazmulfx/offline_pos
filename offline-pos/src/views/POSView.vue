@@ -609,7 +609,7 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
         if (!success) {
           if (doc) {
             console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
-            printInvoiceOffline(doc, pfData, null, true);
+            printInvoiceOffline(doc, pfData, null, true, formatType === 'POS');
           } else {
             const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
             printUrlViaIframe(fallbackUrl);
@@ -618,7 +618,7 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
       } catch (err) {
         console.warn('Failed to fetch and inject printview for iframe print, falling back to offline printing:', err);
         if (doc) {
-          printInvoiceOffline(doc, pfData, null, true);
+          printInvoiceOffline(doc, pfData, null, true, formatType === 'POS');
         } else {
           const doctype = pos.session?.invoice_type || 'POS Invoice';
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
@@ -626,7 +626,7 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
         }
       }
     } else if (doc) {
-      printInvoiceOffline(doc, pfData, null, true);
+      printInvoiceOffline(doc, pfData, null, true, formatType === 'POS');
     }
   } else if (openDialogue) {
     if (!forceOfflinePrint) {
@@ -684,7 +684,7 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
         if (!success) {
           if (doc) {
             console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
-            printInvoiceOffline(doc, pfData, preOpenedWindow, false);
+            printInvoiceOffline(doc, pfData, preOpenedWindow, false, formatType === 'POS');
           } else {
             const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
             if (preOpenedWindow) {
@@ -697,7 +697,7 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
       } catch (err) {
         console.warn('Failed to fetch and inject printview, falling back to offline printing:', err);
         if (doc) {
-          printInvoiceOffline(doc, pfData, preOpenedWindow, false);
+          printInvoiceOffline(doc, pfData, preOpenedWindow, false, formatType === 'POS');
         } else {
           const doctype = pos.session?.invoice_type || 'POS Invoice';
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
@@ -709,7 +709,7 @@ async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string,
         }
       }
     } else if (doc) {
-      printInvoiceOffline(doc, pfData, preOpenedWindow, false);
+      printInvoiceOffline(doc, pfData, preOpenedWindow, false, formatType === 'POS');
     }
   } else if (preOpenedWindow) {
     preOpenedWindow.close();
