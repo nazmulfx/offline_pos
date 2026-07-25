@@ -91,9 +91,9 @@ jinja = {
 # before_install = "offline_pos.install.before_install"
 # after_install = "offline_pos.install.after_install"
 
-after_migrate = [
-	"offline_pos.sync_print_formats.sync_formats"
-]
+# after_migrate = [
+# 	"offline_pos.utils.after_migrate"
+# ]
 
 # Uninstallation
 # ------------
