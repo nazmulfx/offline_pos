@@ -1,0 +1,41 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Role Profile",
+  "modified": "2026-07-16 22:18:34.483879",
+  "name": "Offline POS",
+  "role_profile": "Offline POS",
+  "roles": [
+   {
+    "role": "Accounts User"
+   },
+   {
+    "role": "Delivery User"
+   },
+   {
+    "role": "Item Manager"
+   },
+   {
+    "role": "Purchase Master Manager"
+   },
+   {
+    "role": "Purchase User"
+   },
+   {
+    "role": "Sales Master Manager"
+   },
+   {
+    "role": "Sales User"
+   },
+   {
+    "role": "Stock User"
+   },
+   {
+    "role": "Sales Manager"
+   },
+   {
+    "role": "Stock Manager"
+   }
+  ]
+ }
+]

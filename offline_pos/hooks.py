@@ -91,6 +91,10 @@ jinja = {
 # before_install = "offline_pos.install.before_install"
 # after_install = "offline_pos.install.after_install"
 
+after_migrate = [
+	"offline_pos.sync_print_formats.sync_formats"
+]
+
 # Uninstallation
 # ------------
 
@@ -145,6 +149,13 @@ jinja = {
 doc_events = {
 	"Sales Invoice": {
 		"before_validate": "offline_pos.offline_pos.hooks_methods.sales_invoice.before_validate",
+		"before_submit": "offline_pos.offline_pos.hooks_methods.sales_invoice.before_submit"
+	},
+	"Purchase Receipt": {
+		"validate": "offline_pos.offline_pos.hooks_methods.purchase_receipt.validate",
+	},
+	"Stock Entry": {
+		"validate": "offline_pos.offline_pos.hooks_methods.stock_entry.validate",
 	},
 	"GL Entry": {
 		"on_update": "offline_pos.offline_pos.hooks_methods.utils.on_gl_entry",
@@ -268,7 +279,13 @@ fixtures = [
         "filters": [["name", "in", 
 			["Walk-In-Customer"]
         ]]
-    }
+    },
+	{
+        "dt": "Role Profile",
+        "filters": [["name", "in", 
+			["Offline POS"]
+        ]]
+    },
 ]
 
 

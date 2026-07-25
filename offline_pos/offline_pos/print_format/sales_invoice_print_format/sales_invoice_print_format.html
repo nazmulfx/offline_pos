@@ -1,0 +1,285 @@
+{% set company_doc = frappe.get_doc("Company", doc.company) %}
+<!-- Header Section Start -->
+<div  id="header-html" class="header">
+    <div class="print-heading">
+          <div class="letter-head">
+            <div class="row section-break">
+                <div class="col-xs-12 text-left">
+                    <div class="heading section-break" style="display: grid; grid-template-columns: 25% 75%; gap: 15px;">
+                        <div class="header-logo">
+                            <img src="{{company_doc.company_logo}}" alt="Mendcare Letterhead" height="" style="height: 100px;">
+                        </div>
+                        <div class="header-brand">
+                            <h2 style="text-transform: uppercase;"><b>{{doc.company}}</b></h2>
+                            {% set company_address = frappe.get_doc("Address", doc.company_address) if doc.company_address else {} %}
+                            <p style="font-size:14px;">
+                                <b>Address:</b> {{company_address.address_line1}}, {{company_address.address_line2}}, {{company_address.city}}, {{company_address.country}}
+                            </p>
+                            <p style="font-size:14px;"></p>
+                                {% if company_doc.tax_id %}
+                                <b>Tax ID: </b>{{company_doc.tax_id}},
+                                {% endif %}
+                                {% if company_doc.custom_registration_number %}
+                                <b>Registration No.:</b> {{company_doc.custom_registration_number}}
+                                {% endif %}
+                            </p>
+                            {% if company_doc.phone_no %}
+                            <p style="font-size:14px;"><b>Phone:</b> {{company_doc.phone_no}}</p>
+                            {% endif %}
+                            {% if company_doc.email %}
+                            <p style="font-size:14px;"><b>Email:</b> {{company_doc.email}}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+          </div>
+    </div>
+</div>
+<!-- Header Section End -->
+
+
+
+
+<!-- Print Format Body Start -->
+<div class="print-body">
+    <h2 style="font-size:14px">Sales Invoice</h2>
+    <hr>
+    <div class="row section-break" style="margin-top:10px">
+        <div class="col-xs-6 order-details">
+            <h2>Bill TO:</h2>
+            <div class="customer-details">
+                {% set customer_address = frappe.get_doc("Address", doc.customer_address) if doc.customer_address else {} %}
+                <p>{{doc.customer or ""}}</p>
+                {% if customer_address.address_line1 %}
+                <p>Address: {{customer_address.address_line1 or ""}}</p>
+                {% endif %}
+                {% if doc.contact_mobile %}
+                <p>Mobile : {{doc.contact_mobile or ""}}</p>
+                {% endif %}
+            </div>
+            <div>
+                <h2>Served By: <span style="font-weight:normal">{{doc.owner or ""}}</span></h2>
+            </div>
+        </div>
+        <div class="col-xs-6 invoice-details">
+            <p>Invoice No : <span style="font-weight:normal">{{doc.name}}</span></p>
+            <p>Invoice Date : <span style="font-weight:normal">{{doc.get_formatted("posting_date")}}</span></p>
+        </div>
+    </div>
+    <div>
+        <table class="table table-bordered">
+            <thead>
+                <tr>
+                    <th rowspan="">No</th>
+                    <th rowspan="">Item Description</th>
+                    <th rowspan="">Qty</th>
+                    <th rowspan="">UOM</th>
+                    <th rowspan="">Rate</th>
+                    <th rowspan="">Amount</th>
+                </tr>
+            </thead>
+        	<tbody>
+        		{%- for row in doc.items -%}
+        		<tr>
+        			<td style="width: 3%;">{{ row.idx }}</td>
+        			<td style="">
+                        {% if row.item_code != row.item_name %}
+                        {{row.item_code}}<br>
+                        {% endif %}
+                        {{ row.item_name }}
+                    </td>
+        			<td style="text-align: right;">{{ row.qty }}</td>
+                    <td style="text-align: right;">{{ row.uom or row.stock_uom }} x {{row.conversion_factor}}</td>
+        			<td style="text-align: right;white-space: nowrap;">{{row.get_formatted("rate", doc) }}</td>
+        			<td style="text-align: right;white-space: nowrap;">{{row.get_formatted("amount", doc)}}</td>
+        		</tr>
+        		{%- endfor -%}
+        		<tr style="font-weight:bold">
+        		    <td colspan="2" style="text-align:right">Total</td>
+        		    <td colspan="1" style="text-align:right">{{doc.total_qty}}</td>
+                    <td></td>
+        		    <td></td>
+        		    <td style="text-align:right;white-space: nowrap;">{{doc.get_formatted("total")}}</td>
+        		</tr>
+        	</tbody>
+        </table>
+    </div>
+    
+    <div>
+        <div class="row section-break">
+            <div class="col-xs-7">
+                <p>In Words : {{doc.in_words}}</p>
+
+            </div>
+            <div class="col-xs-5" style="font-weight:bold">
+                {% for row in doc.taxes %}
+                    {% if row.account_head == "Delivery Fee - MCL" %}
+                    <div class="row section-break">
+                        <div class="col-xs-6" style="text-align:right">{{"Delivery Fee"}} :</div>
+                        <div class="col-xs-6" style="text-align:right">{{row.tax_amount}}</div>
+                    </div>
+                    {% endif %}
+                    {% if row.account_head == "Freight and Forwarding Charges - MCL" %}
+                    <div class="row section-break">
+                        <div class="col-xs-6" style="text-align:right">{{"Delivery Charge"}} :</div>
+                        <div class="col-xs-6" style="text-align:right">{{row.tax_amount}}</div>
+                    </div>
+                    {% endif %}
+                {% endfor %}
+                {% if doc.additional_discount_percentage or doc.discount_amount %}
+                <div class="row section-break">
+                    <div class="col-xs-6" style="text-align:right">Discout ({{doc.get_formatted("additional_discount_percentage") ~ "%"}}) :</div>
+                    <div class="col-xs-6" style="text-align:right">{{doc.discount_amount}}</div>
+                </div>
+                {% endif %}
+                {% if doc.rounding_adjustment %}
+                <div class="row section-break">
+                    <div class="col-xs-6" style="text-align:right">Rounded :</div>
+                    <div class="col-xs-6" style="text-align:right">{{doc.rounding_adjustment}}</div>
+                </div>
+                {% endif %}
+                <div class="row section-break">
+                    <div class="col-xs-6" style="text-align:right">Invoice Total :</div>
+                    <div class="col-xs-6" style="text-align:right">{{doc.get_formatted("rounded_total")}}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% if doc.terms %}
+    <p><b>Terms & Conditions: </b>{{doc.terms}}</p>
+    {% endif %}
+</div>
+
+<!-- Print Format Body End -->
+
+
+
+
+<!-- Footer Section Start -->
+<div  id="footer-html" class="footer" style="">
+    <div class="print-footer">
+          <div class="letter-head">
+<div>
+    <div class="row section-break" style="display:flex;align-items:center;justify-content:center;text-align:center;">
+        <div class="col-xs-3">
+            <p style="border-top:1px dotted black;">Official</p>
+        </div>
+        <div class="col-xs-6">
+            <img src="{{company_doc.company_logo}}" alt="Mendcare Letterhead" height="" style="width:100px;padding:10px;">
+        </div>
+        <div class="col-xs-3">
+            <p style="border-top:1px dotted black;">Received by</p>
+        </div>
+    </div>
+    <hr>
+    <div style="font-size:9px;">
+        <div class="col-xs-4" style="text-align:left;">
+            Printed on: {{ frappe.utils.now_datetime().strftime('%d %b %y, %I:%M %p') }}
+        </div>
+        <div class="col-xs-4" style="text-align:center;">
+            <p id="pagenum"><strong>{{ _("Page {0} of {1}").format('<span class="page"></span>', '<span class="topage"></span>') }}</strong>
+            </p>
+        </div>
+        <div class="col-xs-4" style="text-align:right;">
+            orbiterp.cloud
+        </div>
+    </div>
+</div>
+          </div>
+    </div>
+</div>
+<!-- Footer Section End -->
+
+
+
+
+
+<style>
+
+/* Default CSS Customize */
+.letter-head {
+    margin:0 !important;
+}
+.print-format {
+    padding:0.50in !important;
+}
+.print-format th {
+    color: black !important;
+    padding:5px !important;
+    text-align: center;
+}
+.print-format .table-bordered td, .print-format .table-bordered th {
+    border: 1px solid black !important;
+}
+.print-heading {
+    border:none !important;
+    margin-bottom:0px !important;
+}
+
+
+
+/* Custom CSS */
+h2, hr {
+    margin:0px !important;
+    padding:0px !important;
+}
+.order-details {
+    padding-left:45px !important;
+}
+.order-details h2 {
+    font-size:12px;
+    font-weight:bold;
+}
+
+
+.invoice-details {
+    padding-left: 45px !important;
+}
+.invoice-details p {
+    font-weight:12px;
+    font-weight:bold;
+}
+.table {
+    margin: 10px 0px !important;
+}
+.table th, .table td {
+    padding: 3px 5px !important;
+}
+.table th {
+    font-weight: bold;
+}
+
+
+
+
+/* Print Settings */
+@media print {
+    @page {
+        size: A4 portrait;
+    }
+    .print-format {
+        padding: 0.0in !important;
+        display:flex;
+        flex-direction:column;
+        height:100vh;
+    }
+    .table th, .table td {
+        padding: 5px 3px !important;
+    }
+    .header{
+        align-self:flex-start;
+        width:100%;
+    }
+    .print-body{
+        flex-grow:1;
+    }
+    .footer{
+        align-self:flex-end;
+        width:100%;
+    }
+}
+
+
+</style>

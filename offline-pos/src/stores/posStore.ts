@@ -84,8 +84,9 @@ export interface POSSession {
   invoice_type: 'POS Invoice' | 'Sales Invoice';
   apply_discount_on?: string;
   hide_images?: number;
-  print_format?: string;
-  custom_offline_print_format?: string;
+  pos_print_format?: string;
+  standard_print_format?: string;
+  print_mode?: string;
   print_receipt_on_order_complete?: number;
   open_print_dialogue_on_invoice_creation?: number;
   allow_partial_payment?: number;
@@ -213,7 +214,7 @@ export const usePOSStore = defineStore('pos', () => {
         });
         const balance = (result && result.length > 0) ? (parseFloat(result[0].party_current_balance) || 0) : 0;
         
-        // Cache in IndexedDB
+        // Cache in IndexedDB and localStorage
         await cachePartyBalance({
           id: `${company}-${partyType}-${customerName}`,
           company,
@@ -221,12 +222,13 @@ export const usePOSStore = defineStore('pos', () => {
           party: customerName,
           party_current_balance: balance,
         });
+        localStorage.setItem(`cached_balance_${company}_${customerName}`, balance.toString());
 
         if (selectedCustomer.value?.name === customerName) {
           selectedCustomerBalance.value = balance;
         }
       } catch (err) {
-        console.warn('[POSStore] Failed to fetch customer balance from server, falling back to IndexedDB:', err);
+        console.warn('[POSStore] Failed to fetch customer balance from server, falling back to IndexedDB/localStorage:', err);
         await loadCustomerBalanceFromOffline(company, partyType, customerName);
       }
     } else {
@@ -237,14 +239,20 @@ export const usePOSStore = defineStore('pos', () => {
   async function loadCustomerBalanceFromOffline(company: string, partyType: string, customerName: string) {
     try {
       const cached = await getCachedPartyBalance(company, partyType, customerName);
-      const balance = cached ? cached.party_current_balance : 0;
+      let balance = cached ? cached.party_current_balance : null;
+      if (balance === null) {
+        const localBal = localStorage.getItem(`cached_balance_${company}_${customerName}`);
+        balance = localBal ? parseFloat(localBal) : 0;
+      }
       if (selectedCustomer.value?.name === customerName) {
         selectedCustomerBalance.value = balance;
       }
     } catch (err) {
       console.error('[POSStore] Failed to load cached customer balance:', err);
+      const localBal = localStorage.getItem(`cached_balance_${company}_${customerName}`);
+      const balance = localBal ? parseFloat(localBal) : 0;
       if (selectedCustomer.value?.name === customerName) {
-        selectedCustomerBalance.value = 0;
+        selectedCustomerBalance.value = balance;
       }
     }
   }
@@ -255,7 +263,11 @@ export const usePOSStore = defineStore('pos', () => {
     const partyType = 'Customer';
     try {
       const cached = await getCachedPartyBalance(company, partyType, customerName);
-      const oldBalance = cached ? cached.party_current_balance : 0;
+      let oldBalance = cached ? cached.party_current_balance : null;
+      if (oldBalance === null) {
+        const localBal = localStorage.getItem(`cached_balance_${company}_${customerName}`);
+        oldBalance = localBal ? parseFloat(localBal) : 0;
+      }
       const newBalance = oldBalance + delta;
       
       await cachePartyBalance({
@@ -265,6 +277,7 @@ export const usePOSStore = defineStore('pos', () => {
         party: customerName,
         party_current_balance: newBalance,
       });
+      localStorage.setItem(`cached_balance_${company}_${customerName}`, newBalance.toString());
 
       if (selectedCustomer.value?.name === customerName) {
         selectedCustomerBalance.value = newBalance;
@@ -1138,8 +1151,8 @@ export const usePOSStore = defineStore('pos', () => {
     let defaultCustomerName: string | null = null;
     try {
       if (network.isOnline) {
-        console.log(`[POSStore] Fetching POS Settings (invoice_type, custom_default_customer) from server...`);
-        const [invType, defCust] = await Promise.all([
+        console.log(`[POSStore] Fetching POS Settings and System Currency from server...`);
+        const [invType, defCust, sysCurrency] = await Promise.all([
           call('frappe.client.get_single_value', {
             doctype: 'POS Settings',
             field: 'invoice_type',
@@ -1147,6 +1160,10 @@ export const usePOSStore = defineStore('pos', () => {
           call('frappe.client.get_single_value', {
             doctype: 'POS Settings',
             field: 'custom_default_customer',
+          }),
+          call('frappe.client.get_single_value', {
+            doctype: 'System Settings',
+            field: 'currency',
           }),
         ]);
         if (invType === 'Sales Invoice') invoiceType = 'Sales Invoice';
@@ -1156,11 +1173,14 @@ export const usePOSStore = defineStore('pos', () => {
         } else {
           localStorage.removeItem('pos_default_customer_name');
         }
+        if (sysCurrency) {
+          localStorage.setItem('pos_system_currency', sysCurrency);
+        }
       } else {
         defaultCustomerName = localStorage.getItem('pos_default_customer_name');
       }
     } catch (err) {
-      console.warn('[POSStore] Could not fetch POS Settings values:', err);
+      console.warn('[POSStore] Could not fetch POS Settings or System Currency values:', err);
       defaultCustomerName = localStorage.getItem('pos_default_customer_name');
     }
 
@@ -1222,6 +1242,8 @@ export const usePOSStore = defineStore('pos', () => {
       hide_images: profileData.hide_images || 0,
       print_format: profileData.print_format || '',
       custom_offline_print_format: profileData.custom_offline_print_format || '',
+      standard_print_format: profileData.standard_print_format || '',
+      print_mode: profileData.print_mode || 'POS',
       print_receipt_on_order_complete: profileData.print_receipt_on_order_complete || 0,
       open_print_dialogue_on_invoice_creation: profileData.open_print_dialogue_on_invoice_creation || 0,
       allow_partial_payment: profileData.allow_partial_payment,

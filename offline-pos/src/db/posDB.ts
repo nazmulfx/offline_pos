@@ -4,7 +4,7 @@
  */
 
 const DB_NAME = 'offline_pos_db';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 let _db: IDBDatabase | null = null;
 
@@ -77,6 +77,11 @@ export function openPOSDB(): Promise<IDBDatabase> {
           keyPath: 'local_id',
           autoIncrement: true,
         });
+      }
+
+      // Print Formats store
+      if (!db.objectStoreNames.contains('print_formats')) {
+        db.createObjectStore('print_formats', { keyPath: 'name' });
       }
     };
 
@@ -502,5 +507,19 @@ export async function deleteHoldInvoice(localId: number): Promise<void> {
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
   });
+}
+
+// ─── Print Formats ──────────────────────────────────────────────────────────
+
+export async function cachePrintFormat(name: string, data: any): Promise<void> {
+  return withStore<IDBValidKey>('print_formats', 'readwrite', (store) =>
+    store.put({ name, ...data })
+  ).then(() => undefined);
+}
+
+export async function getCachedPrintFormat(name: string): Promise<any | null> {
+  return withStore<any>('print_formats', 'readonly', (store) => store.get(name))
+    .then((res) => res || null)
+    .catch(() => null);
 }
 

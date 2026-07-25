@@ -1,0 +1,207 @@
+<style>
+	.print-format table, .print-format tr, 
+	.print-format td, .print-format th, .print-format div, .print-format p {
+		line-height: 125%;
+		vertical-align: middle;
+		color:black;
+		font-size:9px;
+	}
+	.table {
+	    margin:0px !important;
+	}
+	.print-format td, .print-format th {
+	    padding: 5px !important;
+	}
+	@media screen {
+		.print-format {
+			width: 100%;
+			/*min-height: 8in;*/
+		}
+	}
+	@media print{
+	    @page {
+	        margin:10px;
+	    }
+	    .print-format {
+	        width:100%;
+	        margin:0px;
+	        padding:0px;
+	    }
+	    .table {
+	        width:100%;
+	    }
+	}
+</style>
+
+<!--{% if letter_head %}-->
+<!--    {{ letter_head }}-->
+<!--{% endif %}-->
+{% set company_doc = frappe.get_doc("Company", doc.company) %}
+<p class="text-center" style="margin-bottom: 1rem">
+	<img src="{{company_doc.company_logo}}" alt="Mendcare Letterhead" height="" style="height: 20px;">
+	<span style="font-size:11px;font-weight:bold;">{{ doc.company }}</span><br>
+	{% if company_doc.custom_registration_number %}
+	<b>Registration No.:</b> {{company_doc.custom_registration_number}}<br>
+	{% endif %}
+	<b>{{ doc.select_print_heading or _("Invoice") }}</b><br>
+</p>
+<p>
+	<b>{{ _("Receipt No") }}:</b> {{ doc.name }}<br>
+	<b>{{ _("Cashier") }}:</b> {{ doc.owner }}<br>
+	<b>{{ _("Customer") }}: {{ doc.customer_name }}</b><br>
+	<b>{{ _("Date") }}:</b> {{ doc.get_formatted("posting_date") }}<br>
+	<b>{{ _("Time") }}:</b> {{  doc.get_formatted("posting_time") }}<br>
+</p>
+
+<table class="table table-condensed">
+	<thead>
+		<tr>
+			<th width="45%">{{ _("Item") }}</th>
+			<th width="20%" class="text-right">{{ _("Rate") }}</th>
+			<th width="15%" class="text-right">{{ _("Qty") }}</th>
+			<th width="20%" class="text-right">{{ _("Amount") }}</th>
+		</tr>
+	</thead>
+	<tbody>
+		{%- for item in doc.items -%}
+		<tr>
+			<td>
+				{{ item.item_code }}
+				{%- if item.item_name != item.item_code -%}
+					<br>{{ item.item_name }}
+				{%- endif -%}
+				{%- if item.serial_no -%}
+					<br><b>{{ _("SR.No") }}:</b><br>
+					{{ item.serial_no | replace("\n", ", ") }}
+				{%- endif -%}
+			</td>
+			<td class="text-right">{{ item.rate or 0 }}</td>
+			<!--<td class="text-right">{{ item.get_formatted("rate") }}</td>-->
+			<td class="text-right">{{ item.qty }}</td>
+			<!--<td class="text-right">{{ item.qty }}<br>@ {{ item.get_formatted("rate") }}</td>-->
+			<!--<td class="text-right">{{ item.get_formatted("amount") }}</td>-->
+			<td class="text-right">{{ item.amount or 0 }}</td>
+		</tr>
+		{%- endfor -%}
+	</tbody>
+</table>
+<table class="table table-condensed no-border">
+	<tbody>
+		<tr>
+			{% if doc.flags.show_inclusive_tax_in_print %}
+				<td class="text-right" style="width: 60%">
+					{{ _("Total Excl. Tax") }}
+				</td>
+				<td class="text-right">
+					{{ doc.get_formatted("net_total", doc) }}
+				</td>
+			{% else %}
+				<td class="text-right" style="width: 60%">
+					{{ _("Total") }}
+				</td>
+				<td class="text-right">
+					{{ doc.get_formatted("total", doc) }}
+				</td>
+			{% endif %}
+		</tr>
+		{%- for row in doc.taxes -%}
+		  {%- if not row.included_in_print_rate or doc.flags.show_inclusive_tax_in_print -%}
+			<tr>
+				<td class="text-right" style="width: 60%">
+				    {% if '%' in row.description %}
+					    {{ row.description }}
+					{% else %}
+					    {{ row.description }}@{{ row.rate }}%
+					{% endif %}
+				</td>
+				<td class="text-right">
+					{{ row.get_formatted("tax_amount", doc) }}
+				</td>
+			</tr>
+		  {%- endif -%}
+		{%- endfor -%}
+
+		{%- if doc.discount_amount -%}
+		<tr>
+			<td class="text-right" style="width: 60%">
+				{{ _("Discount") }}
+			</td>
+			<td class="text-right">
+				{{ doc.get_formatted("discount_amount") }}
+			</td>
+		</tr>
+		{%- endif -%}
+		<tr>
+			<td class="text-right" style="width: 60%">
+				<b>{{ _("Grand Total") }}</b>
+			</td>
+			<td class="text-right">
+				{{ doc.get_formatted("grand_total") }}
+			</td>
+		</tr>
+		{%- if doc.rounded_total -%}
+		<!--<tr>-->
+		<!--	<td class="text-right" style="width: 75%">-->
+		<!--		<b>{{ _("Rounded Total") }}</b>-->
+		<!--	</td>-->
+		<!--	<td class="text-right">-->
+		<!--		{{ doc.get_formatted("rounded_total") }}-->
+		<!--	</td>-->
+		<!--</tr>-->
+		{%- endif -%}
+		{% if doc.customer == "___CUSTOMER___" %}
+			{% set previous_outstanding_str = "___PREV_OUTSTANDING___" %}
+			{% set total_due_str = "___TOTAL_DUE___" %}
+			{% set current_due_str = "___CURR_DUE___" %}
+		{% else %}
+			{% set current_outstanding = get_customer_outstanding(doc.customer, doc.company) or 0 %}
+			{% if doc.docstatus == 1 %}
+				{% set previous_outstanding = current_outstanding - doc.outstanding_amount %}
+			{% else %}
+				{% set previous_outstanding = current_outstanding %}
+			{% endif %}
+			{% set total_due = previous_outstanding + doc.grand_total %}
+			{% set current_due = total_due - doc.paid_amount %}
+			{% set previous_outstanding_str = frappe.format(previous_outstanding, {'fieldtype': 'Currency'}) %}
+			{% set total_due_str = frappe.format(total_due, {'fieldtype': 'Currency'}) %}
+			{% set current_due_str = frappe.format(current_due, {'fieldtype': 'Currency'}) %}
+		{% endif %}
+		<tr style="border-bottom:1px solid black;">
+			<td class="text-right" style="width: 60%">
+				<b>{{ _("Prev. Due") }}</b>
+			</td>
+			<td class="text-right">
+				{{ previous_outstanding_str }}
+			</td>
+		</tr>
+		<tr style="border-bottom:1px solid black;">
+			<td class="text-right" style="width: 60%">
+				<b>{{ _("Total Due") }}</b>
+			</td>
+			<td class="text-right">
+				{{ total_due_str }}
+			</td>
+		</tr>
+		{%- for row in doc.payments -%}
+			<tr>
+				<td class="text-right" style="width: 60%">
+				    {{ row.mode_of_payment }}
+				</td>
+				<td class="text-right">
+					{{ row.get_formatted("amount", doc) }}
+				</td>
+			</tr>
+		{%- endfor -%}
+		<tr style="border-bottom:1px solid black;">
+			<td class="text-right" style="width: 60%">
+				<b>{{ _("Curr. Due") }}</b>
+			</td>
+			<td class="text-right">
+				{{ current_due_str }}
+			</td>
+		</tr>
+	</tbody>
+</table>
+
+<p>{{ doc.terms or "" }}</p>
+<p class="text-center">{{ _("Thank you, please visit again.") }}</p>
