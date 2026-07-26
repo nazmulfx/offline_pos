@@ -568,151 +568,64 @@ async function handlePrintChoice(formatType: 'POS' | 'Standard') {
 }
 
 async function executePrint(formatType: 'POS' | 'Standard', invoiceName: string, offline: boolean, doc?: any, preOpenedWindow?: Window | null) {
+  if (preOpenedWindow) {
+    preOpenedWindow.close();
+  }
+
   const printFormat = formatType === 'Standard'
     ? (pos.session?.standard_print_format || 'Standard')
     : (pos.session?.pos_print_format || '');
 
   const pfData = doc ? await resolvePrintFormat(printFormat) : null;
-
-  const autoPrint = pos.session?.print_receipt_on_order_complete === 1;
-  const openDialogue = pos.session?.open_print_dialogue_on_invoice_creation === 1;
-
   const forceOfflinePrint = offline;
 
-  if (autoPrint) {
-    if (!forceOfflinePrint) {
-      try {
-        const doctype = pos.session?.invoice_type || 'POS Invoice';
-        const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}`;
-        const resp = await fetch(printUrl, {
-          headers: {
-            'X-Frappe-Site-Name': window.location.hostname,
-          },
-          credentials: 'include',
-        });
-        
-        let success = false;
-        if (resp.ok && !resp.redirected && !resp.url.includes('/login')) {
-          let html = await resp.text();
-          if (html.includes('print-format')) {
-            success = true;
-            const baseTag = `<base href="${window.location.origin}">`;
-            if (html.includes('<head>')) {
-              html = html.replace('<head>', '<head>' + baseTag);
-            } else {
-              html = baseTag + html;
-            }
-            printHtmlViaIframe(html);
-          }
-        }
-
-        if (!success) {
-          if (doc) {
-            console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
-            printInvoiceOffline(doc, pfData, null, true, formatType === 'POS');
+  if (!forceOfflinePrint) {
+    try {
+      const doctype = pos.session?.invoice_type || 'POS Invoice';
+      const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}`;
+      const resp = await fetch(printUrl, {
+        headers: {
+          'X-Frappe-Site-Name': window.location.hostname,
+        },
+        credentials: 'include',
+      });
+      
+      let success = false;
+      if (resp.ok && !resp.redirected && !resp.url.includes('/login')) {
+        let html = await resp.text();
+        if (html.includes('print-format')) {
+          success = true;
+          const baseTag = `<base href="${window.location.origin}">`;
+          if (html.includes('<head>')) {
+            html = html.replace('<head>', '<head>' + baseTag);
           } else {
-            const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
-            printUrlViaIframe(fallbackUrl);
+            html = baseTag + html;
           }
+          printHtmlViaIframe(html);
         }
-      } catch (err) {
-        console.warn('Failed to fetch and inject printview for iframe print, falling back to offline printing:', err);
+      }
+
+      if (!success) {
         if (doc) {
+          console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
           printInvoiceOffline(doc, pfData, null, true, formatType === 'POS');
         } else {
-          const doctype = pos.session?.invoice_type || 'POS Invoice';
           const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
           printUrlViaIframe(fallbackUrl);
         }
       }
-    } else if (doc) {
-      printInvoiceOffline(doc, pfData, null, true, formatType === 'POS');
-    }
-  } else if (openDialogue) {
-    if (!forceOfflinePrint) {
-      try {
+    } catch (err) {
+      console.warn('Failed to fetch and inject printview for iframe print, falling back to offline printing:', err);
+      if (doc) {
+        printInvoiceOffline(doc, pfData, null, true, formatType === 'POS');
+      } else {
         const doctype = pos.session?.invoice_type || 'POS Invoice';
-        const printUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}`;
-        const resp = await fetch(printUrl, {
-          headers: {
-            'X-Frappe-Site-Name': window.location.hostname,
-          },
-          credentials: 'include',
-        });
-        
-        let success = false;
-        if (resp.ok && !resp.redirected && !resp.url.includes('/login')) {
-          let html = await resp.text();
-          if (html.includes('print-format')) {
-            success = true;
-            
-            const baseTag = `<base href="${window.location.origin}">`;
-            const closeScript = `
-              \x3Cscript>
-                function doPrint() {
-                  window.focus();
-                  window.print();
-                }
-                window.addEventListener('afterprint', function() {
-                  window.close();
-                });
-                setTimeout(doPrint, 500);
-              \x3C/script>
-            `;
-            
-            if (html.includes('<head>')) {
-              html = html.replace('<head>', '<head>' + baseTag);
-            } else {
-              html = baseTag + html;
-            }
-
-            if (html.includes('</body>')) {
-              html = html.replace('</body>', closeScript + '</body>');
-            } else {
-              html += closeScript;
-            }
-
-            const targetWin = preOpenedWindow || window.open('', '_blank');
-            if (targetWin) {
-              targetWin.document.open();
-              targetWin.document.write(html);
-              targetWin.document.close();
-            }
-          }
-        }
-
-        if (!success) {
-          if (doc) {
-            console.warn('Failed to fetch/inject printview template. Falling back to offline printing.');
-            printInvoiceOffline(doc, pfData, preOpenedWindow, false, formatType === 'POS');
-          } else {
-            const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
-            if (preOpenedWindow) {
-              preOpenedWindow.location.href = fallbackUrl;
-            } else {
-              window.open(fallbackUrl, '_blank');
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to fetch and inject printview, falling back to offline printing:', err);
-        if (doc) {
-          printInvoiceOffline(doc, pfData, preOpenedWindow, false, formatType === 'POS');
-        } else {
-          const doctype = pos.session?.invoice_type || 'POS Invoice';
-          const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
-          if (preOpenedWindow) {
-            preOpenedWindow.location.href = fallbackUrl;
-          } else {
-            window.open(fallbackUrl, '_blank');
-          }
-        }
+        const fallbackUrl = `/printview?doctype=${encodeURIComponent(doctype)}&name=${encodeURIComponent(invoiceName)}&format=${encodeURIComponent(printFormat)}&trigger_print=1`;
+        printUrlViaIframe(fallbackUrl);
       }
-    } else if (doc) {
-      printInvoiceOffline(doc, pfData, preOpenedWindow, false, formatType === 'POS');
     }
-  } else if (preOpenedWindow) {
-    preOpenedWindow.close();
+  } else if (doc) {
+    printInvoiceOffline(doc, pfData, null, true, formatType === 'POS');
   }
 }
 
