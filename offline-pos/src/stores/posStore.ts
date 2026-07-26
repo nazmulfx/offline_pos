@@ -85,6 +85,7 @@ export interface POSSession {
   apply_discount_on?: string;
   hide_images?: number;
   pos_print_format?: string;
+  print_format?: string;
   standard_print_format?: string;
   print_mode?: string;
   print_receipt_on_order_complete?: number;
@@ -1221,8 +1222,8 @@ export const usePOSStore = defineStore('pos', () => {
       invoice_type: invoiceType,
       apply_discount_on: profileData.apply_discount_on || 'Grand Total',
       hide_images: profileData.hide_images || 0,
+      pos_print_format: profileData.pos_print_format || profileData.print_format || '',
       print_format: profileData.print_format || '',
-      custom_offline_print_format: profileData.custom_offline_print_format || '',
       standard_print_format: profileData.standard_print_format || '',
       print_mode: profileData.print_mode || 'POS',
       print_receipt_on_order_complete: profileData.print_receipt_on_order_complete || 0,
