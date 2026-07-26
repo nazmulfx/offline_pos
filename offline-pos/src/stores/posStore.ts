@@ -626,20 +626,6 @@ export const usePOSStore = defineStore('pos', () => {
       item.allocations = allocs;
       item.batch_no = allocs[0]?.batch_no || '';
       item.serial_no = allocs.map(a => a.serial_no).filter(Boolean).join('\n');
-
-      const catalogItem = items.value.find((i) => i.item_code === item.item_code);
-      const stockUom = catalogItem?.stock_uom || catalogItem?.uom || 'Nos';
-      if (item.uom !== stockUom) {
-        item.uom = stockUom;
-        item.conversion_factor = 1;
-        if (catalogItem) {
-          item.price_list_rate = catalogItem.price_list_rate || 0;
-          item.original_price_list_rate = catalogItem.price_list_rate || 0;
-          const pct = item.discount_percentage || 0;
-          item.rate = item.price_list_rate * (1 - pct / 100);
-          item.amount = item.qty * item.rate;
-        }
-      }
     }
   }
 
@@ -664,14 +650,9 @@ export const usePOSStore = defineStore('pos', () => {
       return;
     }
 
-    let uom = item.uom;
+    let uom = item.uom || item.stock_uom || 'Nos';
     let rate = item.price_list_rate || 0;
     let conversionFactor = 1;
-    if (meta && (meta.has_serial_no || meta.has_batch_no)) {
-      uom = item.stock_uom || item.uom || 'Nos';
-      conversionFactor = 1;
-      rate = item.price_list_rate || 0;
-    }
 
     let selectedBatchNo = '';
     let selectedSerialNo = '';

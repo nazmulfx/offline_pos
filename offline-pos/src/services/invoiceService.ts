@@ -175,8 +175,9 @@ function buildInvoiceDoc(payload: CreateInvoicePayload): Record<string, any> {
       };
 
       if (item.allocations && item.allocations.length > 0) {
+        const factor = item.conversion_factor || 1;
         return item.allocations.map((alloc) => {
-          const qty = alloc.qty;
+          const qty = alloc.qty / factor;
           const rate = item.rate;
           const price_list_rate = item.price_list_rate || rate;
           const discount_amount = price_list_rate - rate;
