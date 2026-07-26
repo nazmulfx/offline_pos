@@ -298,7 +298,8 @@ async function onUOMChanged(newUom: string) {
   if (uomPrices.value[newUom] !== undefined) {
     newPriceListRate = uomPrices.value[newUom];
   } else {
-    newPriceListRate = 0;
+    const baseRate = posItem.value?.price_list_rate || 0;
+    newPriceListRate = baseRate ? baseRate * factor : (item.value.price_list_rate || item.value.rate);
   }
 
   pos.updateCartItemUOM(item.value.item_code, newUom, item.value.batch_no);
