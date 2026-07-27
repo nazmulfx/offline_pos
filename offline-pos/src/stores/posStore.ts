@@ -85,6 +85,7 @@ export interface POSSession {
   apply_discount_on?: string;
   hide_images?: number;
   pos_print_format?: string;
+  print_format?: string;
   standard_print_format?: string;
   print_mode?: string;
   print_receipt_on_order_complete?: number;
@@ -537,7 +538,13 @@ export const usePOSStore = defineStore('pos', () => {
     return list;
   }
 
-  function autoSelectSerialsAndBatches(itemCode: string, requiredQty: number, excludeIdx: number | null = null, targetBatchNo: string = ''): CartItemAllocation[] {
+  function autoSelectSerialsAndBatches(
+    itemCode: string, 
+    requiredQty: number, 
+    excludeIdx: number | null = null, 
+    targetBatchNo: string = '',
+    conversionFactor: number = 1
+  ): CartItemAllocation[] {
     const meta = serialBatchMap.value[itemCode];
     if (!meta) {
       return [];
@@ -577,31 +584,110 @@ export const usePOSStore = defineStore('pos', () => {
       }
     } else if (meta.has_batch_no) {
       const sortedBatches = sortBatches(pool.batches);
-      for (const b of sortedBatches) {
-        if (targetBatchNo && b.batch_no !== targetBatchNo) continue;
-        if (remainingQty <= 0) break;
-        const allocQty = Math.min(remainingQty, b.qty);
-        if (allocQty > 0) {
+
+      if (conversionFactor > 1) {
+        // First check if any single batch has enough available stock in whole UOM units to fulfill the ENTIRE requiredQty
+        const singleFullBatch = sortedBatches.find(b => {
+          if (targetBatchNo && b.batch_no !== targetBatchNo) return false;
+          const fullUomQtyInStock = Math.floor(b.qty / conversionFactor) * conversionFactor;
+          return fullUomQtyInStock >= remainingQty;
+        });
+
+        if (singleFullBatch) {
           allocations.push({
-            batch_no: b.batch_no,
-            serial_no: '',
-            qty: allocQty
-          });
-          remainingQty -= allocQty;
-        }
-      }
-      if (remainingQty > 0 && sortedBatches.length > 0) {
-        const fallbackBatch = targetBatchNo || sortedBatches[0].batch_no;
-        if (allocations.length > 0) {
-          allocations[0].qty += remainingQty;
-        } else {
-          allocations.push({
-            batch_no: fallbackBatch,
+            batch_no: singleFullBatch.batch_no,
             serial_no: '',
             qty: remainingQty
           });
+          remainingQty = 0;
+        } else {
+          // Pass 2: Allocate maximum whole UOM units per batch following sorted order (FIFO/LIFO/Expiry)
+          for (const b of sortedBatches) {
+            if (targetBatchNo && b.batch_no !== targetBatchNo) continue;
+            if (remainingQty <= 0) break;
+
+            const maxUomStock = Math.floor(b.qty / conversionFactor) * conversionFactor;
+            if (maxUomStock <= 0) continue;
+
+            const allocQty = Math.min(remainingQty, maxUomStock);
+            if (allocQty > 0) {
+              allocations.push({
+                batch_no: b.batch_no,
+                serial_no: '',
+                qty: allocQty
+              });
+              remainingQty -= allocQty;
+            }
+          }
+
+          // Fallback: If requiredQty is still not fully allocated, allocate remaining deficit from available batches
+          if (remainingQty > 0 && sortedBatches.length > 0) {
+            for (const b of sortedBatches) {
+              if (targetBatchNo && b.batch_no !== targetBatchNo) continue;
+              if (remainingQty <= 0) break;
+
+              const existingAlloc = allocations.find(a => a.batch_no === b.batch_no);
+              const alreadyAllocated = existingAlloc ? existingAlloc.qty : 0;
+              const remainingInBatch = Math.max(0, b.qty - alreadyAllocated);
+              if (remainingInBatch > 0) {
+                const addQty = Math.min(remainingQty, remainingInBatch);
+                if (existingAlloc) {
+                  existingAlloc.qty += addQty;
+                } else {
+                  allocations.push({
+                    batch_no: b.batch_no,
+                    serial_no: '',
+                    qty: addQty
+                  });
+                }
+                remainingQty -= addQty;
+              }
+            }
+
+            if (remainingQty > 0 && sortedBatches.length > 0) {
+              const fallbackBatch = targetBatchNo || sortedBatches[0].batch_no;
+              const existingAlloc = allocations.find(a => a.batch_no === fallbackBatch);
+              if (existingAlloc) {
+                existingAlloc.qty += remainingQty;
+              } else {
+                allocations.push({
+                  batch_no: fallbackBatch,
+                  serial_no: '',
+                  qty: remainingQty
+                });
+              }
+              remainingQty = 0;
+            }
+          }
         }
-        remainingQty = 0;
+      } else {
+        // Standard stock UOM allocation (conversionFactor <= 1)
+        for (const b of sortedBatches) {
+          if (targetBatchNo && b.batch_no !== targetBatchNo) continue;
+          if (remainingQty <= 0) break;
+          const allocQty = Math.min(remainingQty, b.qty);
+          if (allocQty > 0) {
+            allocations.push({
+              batch_no: b.batch_no,
+              serial_no: '',
+              qty: allocQty
+            });
+            remainingQty -= allocQty;
+          }
+        }
+        if (remainingQty > 0 && sortedBatches.length > 0) {
+          const fallbackBatch = targetBatchNo || sortedBatches[0].batch_no;
+          if (allocations.length > 0) {
+            allocations[0].qty += remainingQty;
+          } else {
+            allocations.push({
+              batch_no: fallbackBatch,
+              serial_no: '',
+              qty: remainingQty
+            });
+          }
+          remainingQty = 0;
+        }
       }
     } else if (meta.has_serial_no) {
       allocations.push({
@@ -620,8 +706,9 @@ export const usePOSStore = defineStore('pos', () => {
     if (!meta) return;
 
     if (meta.has_serial_no || meta.has_batch_no) {
-      const requiredQty = item.qty * (item.conversion_factor || 1);
-      const allocs = autoSelectSerialsAndBatches(item.item_code, requiredQty, idx);
+      const conversionFactor = item.conversion_factor || 1;
+      const requiredQty = item.qty * conversionFactor;
+      const allocs = autoSelectSerialsAndBatches(item.item_code, requiredQty, idx, '', conversionFactor);
       
       item.allocations = allocs;
       item.batch_no = allocs[0]?.batch_no || '';
@@ -1221,8 +1308,8 @@ export const usePOSStore = defineStore('pos', () => {
       invoice_type: invoiceType,
       apply_discount_on: profileData.apply_discount_on || 'Grand Total',
       hide_images: profileData.hide_images || 0,
+      pos_print_format: profileData.pos_print_format || profileData.print_format || '',
       print_format: profileData.print_format || '',
-      custom_offline_print_format: profileData.custom_offline_print_format || '',
       standard_print_format: profileData.standard_print_format || '',
       print_mode: profileData.print_mode || 'POS',
       print_receipt_on_order_complete: profileData.print_receipt_on_order_complete || 0,
@@ -1871,7 +1958,7 @@ export const usePOSStore = defineStore('pos', () => {
       } else if (batchNo) {
         newCartItem.allocations = [{ batch_no: batchNo, serial_no: '', qty: 1 }];
       } else if (meta && (meta.has_serial_no || meta.has_batch_no)) {
-        newCartItem.allocations = autoSelectSerialsAndBatches(item.item_code, 1);
+        newCartItem.allocations = autoSelectSerialsAndBatches(item.item_code, conversionFactor, null, '', conversionFactor);
         newCartItem.batch_no = newCartItem.allocations[0]?.batch_no || '';
         newCartItem.serial_no = newCartItem.allocations.map(a => a.serial_no).filter(Boolean).join('\n');
       }
