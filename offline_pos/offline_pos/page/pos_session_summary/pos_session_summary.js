@@ -1,10 +1,17 @@
 frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: 'POS Session Summary Report',
+		title: __('POS Session Summary Report'),
 		single_column: true,
 		hide_sidebar: true
 	});
+
+	var reload_btn = page.add_inner_button(__('Reload'), function() {
+		refresh_report();
+	});
+	if (reload_btn) {
+		reload_btn.prepend('<i class="fa fa-refresh" style="margin-right: 5px;"></i>');
+	}
 
 	// Add filters
 	var company_filter = page.add_field({
@@ -561,6 +568,9 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 	}
 
 	function refresh_report() {
+		var $icon = $(wrapper).find('.fa-refresh, i.fa-refresh');
+		$icon.addClass('fa-spin icon-spin');
+
 		var filters = {
 			company: page.fields_dict.company.get_value(),
 			pos_profile: page.fields_dict.pos_profile.get_value(),
@@ -584,6 +594,9 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 				} else {
 					render_empty_state();
 				}
+			},
+			always: function() {
+				$icon.removeClass('fa-spin icon-spin');
 			}
 		});
 	}
