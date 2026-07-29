@@ -17,6 +17,56 @@
 	width: 100%;
 }
 
+.due-advance-section-wrapper {
+	background: #f0f7ff;
+	border: 1px solid #bee3f8;
+	border-left: 5px solid #3182ce;
+	border-radius: 12px;
+	padding: 16px 20px;
+	margin-top: 25px;
+	margin-bottom: 25px;
+	box-shadow: 0 4px 6px -1px rgba(49, 130, 206, 0.08);
+}
+
+.due-advance-section-wrapper .pos-section-subtitle {
+	font-size: 13px;
+	font-weight: 700;
+	color: #2b6cb0;
+	margin-top: 0;
+	margin-bottom: 16px;
+	text-transform: uppercase;
+	letter-spacing: 0.8px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	background: transparent;
+	padding: 0;
+	border: none;
+	width: auto;
+}
+
+.due-advance-section-wrapper .pos-summary-row {
+	margin-bottom: 0;
+}
+
+.due-advance-row {
+	flex-wrap: wrap;
+}
+
+.due-advance-row .summary-card {
+	min-width: 200px;
+}
+
+.due-advance-card {
+	border-top: 3px solid #3182ce;
+	background-color: #ffffff;
+}
+
+.due-advance-total-card {
+	border-top: 3px solid #2b6cb0;
+	background-color: #eef6ff;
+}
+
 .summary-operator {
 	font-size: 28px;
 	font-weight: 700;

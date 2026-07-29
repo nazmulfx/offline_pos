@@ -1,10 +1,17 @@
 frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 	var page = frappe.ui.make_app_page({
 		parent: wrapper,
-		title: 'POS Session Summary Report',
+		title: __('POS Session Summary Report'),
 		single_column: true,
 		hide_sidebar: true
 	});
+
+	var reload_btn = page.add_inner_button(__('Reload'), function() {
+		refresh_report();
+	});
+	if (reload_btn) {
+		reload_btn.prepend('<i class="fa fa-refresh" style="margin-right: 5px;"></i>');
+	}
 
 	// Add filters
 	var company_filter = page.add_field({
@@ -76,6 +83,16 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 		}
 	});
 
+	var show_due_advance_filter = page.add_field({
+		fieldname: 'show_due_advance_payment',
+		label: __('Include Non-POS Payments'),
+		fieldtype: 'Check',
+		default: 0,
+		change: function() {
+			refresh_report();
+		}
+	});
+
 	// Main elements
 	var container = $('<div class="pos-session-summary-container"></div>').appendTo(page.body);
 	var summary_section = $('<div class="pos-summary-cards"></div>').appendTo(container);
@@ -96,8 +113,8 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 		summary_section.html('');
 	}
 
-	function render_table(data) {
-		var total_sessions = data.length;
+	function render_table(data, due_advance_payments) {
+		var total_sessions = data ? data.length : 0;
 		var total_cash_sales = 0;
 		var total_bank_card_sales = 0;
 		var total_credit_sales = 0;
@@ -108,7 +125,7 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 		var total_actual_cash = 0;
 		var total_difference = 0;
 
-		data.forEach(function(row) {
+		(data || []).forEach(function(row) {
 			total_cash_sales += row.cash_sales || 0;
 			total_bank_card_sales += row.bank_card_sales || 0;
 			total_credit_sales += row.credit_sales || 0;
@@ -125,6 +142,80 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 		// Render summary cards
 		var diff_class = total_difference > 0 ? 'diff-positive' : (total_difference < 0 ? 'diff-negative' : 'diff-zero');
 		var diff_sign = total_difference > 0 ? '+' : '';
+
+		var show_due_advance = page.fields_dict.show_due_advance_payment.get_value();
+		var due_advance_html = '';
+		if (show_due_advance && due_advance_payments && due_advance_payments.length > 0) {
+			var total_due_advance = 0;
+			due_advance_html += `
+				<div class="due-advance-section-wrapper">
+					<div class="pos-section-subtitle">
+						<i class="fa fa-file-text-o"></i>
+						<span>${__('Due & Advance Payments Collection (Payment Entries)')}</span>
+					</div>
+					<div class="pos-summary-row due-advance-row">
+			`;
+			due_advance_payments.forEach(function(p, idx) {
+				total_due_advance += (p.amount || 0);
+				var mode_lower = (p.mode_of_payment || '').toLowerCase();
+				var icon_class = 'icon-bank';
+				var icon_name = 'fa-credit-card';
+				if (mode_lower.includes('cash')) {
+					icon_class = 'icon-cash';
+					icon_name = 'fa-money';
+				} else if (mode_lower.includes('bank') || mode_lower.includes('card') || mode_lower.includes('credit')) {
+					icon_class = 'icon-bank';
+					icon_name = 'fa-credit-card';
+				} else if (mode_lower.includes('wire') || mode_lower.includes('cheque') || mode_lower.includes('transfer')) {
+					icon_class = 'icon-bank';
+					icon_name = 'fa-university';
+				}
+
+				if (idx > 0) {
+					due_advance_html += `<div class="summary-operator">+</div>`;
+				}
+
+				due_advance_html += `
+					<div class="summary-card due-advance-card">
+						<div class="summary-icon ${icon_class}"><i class="fa ${icon_name}"></i></div>
+						<div class="summary-details">
+							<span class="summary-label">${p.mode_of_payment}</span>
+							<span class="summary-value">${format_amount(p.amount, current_currency)}</span>
+						</div>
+					</div>
+				`;
+			});
+
+			due_advance_html += `
+					<div class="summary-operator">=</div>
+					<div class="summary-card due-advance-card due-advance-total-card">
+						<div class="summary-icon icon-net"><i class="fa fa-calculator"></i></div>
+						<div class="summary-details">
+							<span class="summary-label">${__('Total')}</span>
+							<span class="summary-value">${format_amount(total_due_advance, current_currency)}</span>
+						</div>
+					</div>
+				</div>
+			</div>`;
+		} else if (show_due_advance) {
+			due_advance_html += `
+				<div class="due-advance-section-wrapper">
+					<div class="pos-section-subtitle">
+						<i class="fa fa-file-text-o"></i>
+						<span>${__('Due & Advance Payments Collection (Payment Entries)')}</span>
+					</div>
+					<div class="pos-summary-row due-advance-row">
+						<div class="summary-card due-advance-card due-advance-total-card">
+							<div class="summary-icon icon-net"><i class="fa fa-calculator"></i></div>
+							<div class="summary-details">
+								<span class="summary-label">${__('Total Due/Advance')}</span>
+								<span class="summary-value">${format_amount(0, current_currency)}</span>
+							</div>
+						</div>
+					</div>
+				</div>
+			`;
+		}
 
 		summary_section.html(`
 			<div class="pos-summary-row">
@@ -201,6 +292,7 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 					</div>
 				</div>
 			</div>
+			${due_advance_html}
 		`);
 
 		// Render table
@@ -227,7 +319,7 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 					<tbody>
 		`;
 
-		data.forEach(function(row) {
+		(data || []).forEach(function(row) {
 			var status_class = row.status === 'Open' ? 'badge-success' : 'badge-secondary';
 			var diff_class = '';
 			var diff_text = '-';
@@ -476,13 +568,17 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 	}
 
 	function refresh_report() {
+		var $icon = $(wrapper).find('.fa-refresh, i.fa-refresh');
+		$icon.addClass('fa-spin icon-spin');
+
 		var filters = {
 			company: page.fields_dict.company.get_value(),
 			pos_profile: page.fields_dict.pos_profile.get_value(),
 			user: page.fields_dict.user.get_value(),
 			status: page.fields_dict.status.get_value(),
 			from_date: page.fields_dict.from_date.get_value(),
-			to_date: page.fields_dict.to_date.get_value()
+			to_date: page.fields_dict.to_date.get_value(),
+			show_due_advance_payment: page.fields_dict.show_due_advance_payment.get_value()
 		};
 
 		frappe.call({
@@ -490,11 +586,17 @@ frappe.pages['pos-session-summary'].on_page_load = function(wrapper) {
 			args: filters,
 			freeze: true,
 			callback: function(r) {
-				if (r.message && r.message.length > 0) {
-					render_table(r.message);
+				var sessions = Array.isArray(r.message) ? r.message : (r.message ? (r.message.sessions || []) : []);
+				var due_advance_payments = (r.message && r.message.due_advance_payments) ? r.message.due_advance_payments : [];
+
+				if (sessions.length > 0 || due_advance_payments.length > 0) {
+					render_table(sessions, due_advance_payments);
 				} else {
 					render_empty_state();
 				}
+			},
+			always: function() {
+				$icon.removeClass('fa-spin icon-spin');
 			}
 		});
 	}

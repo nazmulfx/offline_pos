@@ -12,7 +12,7 @@ def before_validate(doc, method=None):
     if doc.amended_from and doc.custom_offline_id:
         doc.custom_offline_id = ''
 
-    if doc.amended_from:
+    if doc.amended_from and doc.is_new():
         fetch_payments_from_older_invoice(doc)
 
 def before_submit(doc, method=None):
