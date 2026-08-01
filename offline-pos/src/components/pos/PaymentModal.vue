@@ -82,18 +82,21 @@
             </div>
           </div>
 
-          <!-- Quick Cash buttons -->
-          <div class="payment-modal__quick" v-if="paymentMethods[primaryMethodIdx]?.mode_of_payment === 'Cash'">
+          <!-- Quick Actions -->
+          <div class="payment-modal__quick">
             <button
-              v-for="preset in quickCashPresets"
-              :key="preset"
               class="payment-modal__quick-btn"
-              @click="setCashAmount(preset)"
-            >{{ fmt(preset) }}</button>
-            <button class="payment-modal__quick-btn payment-modal__quick-btn--exact" @click="setExact">
-              Exact
+              :class="{ 'payment-modal__quick-btn--exact': amountPaid >= payableTotal && amountPaid > 0 }"
+              @click="setExact"
+            >
+              Exact Pay
             </button>
-            <button v-if="pos.session?.allow_partial_payment === 1" class="payment-modal__quick-btn payment-modal__quick-btn--credit" @click="setCredit">
+            <button
+              v-if="pos.session?.allow_partial_payment === 1"
+              class="payment-modal__quick-btn"
+              :class="{ 'payment-modal__quick-btn--credit': amountPaid === 0 }"
+              @click="setCredit"
+            >
               Credit Sale (0)
             </button>
           </div>
@@ -208,16 +211,6 @@ const canSubmit = computed(() => {
   return amountPaid.value >= payableTotal.value;
 });
 
-const quickCashPresets = computed(() => {
-  const total = payableTotal.value;
-  const presets = [
-    Math.ceil(total / 100) * 100,
-    Math.ceil(total / 500) * 500,
-    Math.ceil(total / 1000) * 1000,
-  ].filter((v, i, arr) => v >= total && arr.indexOf(v) === i);
-  return [...new Set([total, ...presets])].slice(0, 4);
-});
-
 function selectMethod(idx: number) {
   const oldIdx = primaryMethodIdx.value;
   primaryMethodIdx.value = idx;
@@ -271,10 +264,6 @@ function onInputFocus(e: Event, idx: number) {
       }
     }, 10);
   }
-}
-
-function setCashAmount(amount: number) {
-  paymentMethods.value[primaryMethodIdx.value].amount = amount;
 }
 
 function setExact() {
