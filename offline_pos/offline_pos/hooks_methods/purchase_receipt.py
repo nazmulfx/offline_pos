@@ -13,11 +13,10 @@ def process_batch(doc):
                 new_batch_id = frappe.new_doc("Batch")
                 new_batch_id.batch_id = item.new_batch
                 new_batch_id.item = item.item_code
-                new_batch_id.stock_uom = item.uom
+                # new_batch_id.stock_uom = item.uom
                 new_batch_id.expiry_date = item.exp_date
 
                 new_batch_id.save()
-                new_batch_id.submit()
 
 def assign_batch(doc):
     for item in doc.items:
