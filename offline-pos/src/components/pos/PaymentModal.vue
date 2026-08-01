@@ -59,11 +59,10 @@
               :key="idx"
               class="payment-modal__method"
             >
-              <label class="payment-modal__method-label">
+              <label class="payment-modal__method-label" @click.prevent="selectMethod(idx)">
                 <input
                   type="radio"
-                  v-model="primaryMethodIdx"
-                  :value="idx"
+                  :checked="primaryMethodIdx === idx"
                   class="payment-modal__radio"
                 />
                 <span class="payment-modal__method-icon">
@@ -78,23 +77,26 @@
                 v-model.number="method.amount"
                 min="0"
                 step="0.01"
-                @focus="primaryMethodIdx = idx"
+                @focus="onInputFocus($event, idx)"
               />
             </div>
           </div>
 
-          <!-- Quick Cash buttons -->
-          <div class="payment-modal__quick" v-if="paymentMethods[primaryMethodIdx]?.mode_of_payment === 'Cash'">
+          <!-- Quick Actions -->
+          <div class="payment-modal__quick">
             <button
-              v-for="preset in quickCashPresets"
-              :key="preset"
               class="payment-modal__quick-btn"
-              @click="setCashAmount(preset)"
-            >{{ fmt(preset) }}</button>
-            <button class="payment-modal__quick-btn payment-modal__quick-btn--exact" @click="setExact">
-              Exact
+              :class="{ 'payment-modal__quick-btn--exact': amountPaid >= payableTotal && amountPaid > 0 }"
+              @click="setExact"
+            >
+              Exact Pay
             </button>
-            <button v-if="pos.session?.allow_partial_payment === 1" class="payment-modal__quick-btn payment-modal__quick-btn--credit" @click="setCredit">
+            <button
+              v-if="pos.session?.allow_partial_payment === 1"
+              class="payment-modal__quick-btn"
+              :class="{ 'payment-modal__quick-btn--credit': amountPaid === 0 }"
+              @click="setCredit"
+            >
               Credit Sale (0)
             </button>
           </div>
@@ -209,22 +211,66 @@ const canSubmit = computed(() => {
   return amountPaid.value >= payableTotal.value;
 });
 
-const quickCashPresets = computed(() => {
-  const total = payableTotal.value;
-  const presets = [
-    Math.ceil(total / 100) * 100,
-    Math.ceil(total / 500) * 500,
-    Math.ceil(total / 1000) * 1000,
-  ].filter((v, i, arr) => v >= total && arr.indexOf(v) === i);
-  return [...new Set([total, ...presets])].slice(0, 4);
-});
+function selectMethod(idx: number) {
+  const oldIdx = primaryMethodIdx.value;
+  primaryMethodIdx.value = idx;
 
-function setCashAmount(amount: number) {
-  paymentMethods.value[primaryMethodIdx.value].amount = amount;
+  const total = payableTotal.value;
+  const currentVal = Number(paymentMethods.value[idx].amount) || 0;
+
+  // Calculate sum of all other methods excluding target idx
+  let sumOthers = 0;
+  let oldMethodHoldsFullTotal = false;
+  paymentMethods.value.forEach((m, i) => {
+    if (i !== idx) {
+      const amt = Number(m.amount) || 0;
+      sumOthers += amt;
+      if (i === oldIdx && amt === total) {
+        oldMethodHoldsFullTotal = true;
+      }
+    }
+  });
+
+  // 1. If previous method held 100% of payable total (e.g., default Cash = 600), move total to new method
+  if (oldMethodHoldsFullTotal && oldIdx >= 0 && oldIdx !== idx) {
+    paymentMethods.value[oldIdx].amount = 0;
+    paymentMethods.value[idx].amount = total;
+  }
+  // 2. If target method is currently 0, auto-fill remaining unpaid balance
+  else if (currentVal === 0 && sumOthers < total) {
+    const remaining = Math.round((total - sumOthers) * 100) / 100;
+    paymentMethods.value[idx].amount = remaining;
+  }
+  // 3. If target method already has a non-zero amount (e.g. Cash = 150), preserve it so user can edit!
+}
+
+function onInputFocus(e: Event, idx: number) {
+  selectMethod(idx);
+  const target = e.target as HTMLInputElement;
+  if (target) {
+    setTimeout(() => {
+      try {
+        const valStr = String(target.value ?? '');
+        const len = valStr.length;
+        if (target.type === 'number') {
+          target.type = 'text';
+          target.setSelectionRange(len, len);
+          target.type = 'number';
+        } else if (typeof target.setSelectionRange === 'function') {
+          target.setSelectionRange(len, len);
+        }
+      } catch (_) {
+        // Fallback for browsers that don't allow type toggling
+      }
+    }, 10);
+  }
 }
 
 function setExact() {
-  paymentMethods.value[primaryMethodIdx.value].amount = payableTotal.value;
+  const idx = primaryMethodIdx.value;
+  paymentMethods.value.forEach((p, i) => {
+    p.amount = i === idx ? payableTotal.value : 0;
+  });
 }
 
 function setCredit() {
