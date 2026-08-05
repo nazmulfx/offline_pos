@@ -8,12 +8,12 @@
   <Teleport to="body">
     <!-- Backdrop -->
     <Transition name="frappe-modal-fade">
-      <div v-if="isOpen && item" class="frappe-modal-backdrop" @click="closeModal" />
+      <div v-if="isOpen && item" class="frappe-modal-backdrop" @click.self="closeModal" />
     </Transition>
 
     <!-- ERPNext Desk Modal Container -->
     <Transition name="frappe-modal-scale">
-      <div v-if="isOpen && item" class="frappe-modal-dialog" role="dialog" aria-modal="true" aria-label="Sales Invoice Details">
+      <div v-if="isOpen && item" class="frappe-modal-dialog" @click.stop role="dialog" aria-modal="true" aria-label="Sales Invoice Details">
 
         <!-- ERPNext Form Header -->
         <div class="frappe-modal-header">
@@ -63,27 +63,113 @@
           <!-- Section: Document Overview Details -->
           <div class="frappe-form-section">
             <div class="frappe-section-label">Details</div>
-            <div class="frappe-control-grid">
-              <div class="frappe-control">
-                <div class="frappe-control-label">Customer</div>
-                <div class="frappe-control-value bold-text">{{ invoiceDoc?.customer }}</div>
+            <div class="frappe-details-card">
+              <!-- Customer Selection Block -->
+              <div class="frappe-customer-block">
+                <div class="frappe-customer-header-row">
+                  <span class="frappe-control-label">Customer</span>
+                  <button
+                    class="frappe-btn frappe-btn-primary-ghost frappe-btn-xs"
+                    :disabled="isRefreshingCustomers"
+                    @click.stop="refreshCustomersFromServer"
+                    title="Fetch & update customer list from ERPNext server to IndexedDB"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      width="12"
+                      height="12"
+                      :class="{ 'frappe-spin-icon': isRefreshingCustomers }"
+                    >
+                      <path d="M23 4v6h-6M1 20v-6h6"/>
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                    </svg>
+                    <span>{{ isRefreshingCustomers ? 'Updating…' : 'Update Customer List' }}</span>
+                  </button>
+                </div>
+
+                <div class="frappe-customer-field-body">
+                  <!-- Custom Searchable Select Component -->
+                  <div class="frappe-searchable-picker" @click.stop>
+                    <!-- Trigger Box -->
+                    <div
+                      class="picker-trigger-box"
+                      :class="{ 'control-blocked': isBlocked || (editedCustomer && editedCustomer.startsWith('OFFLINE-')), active: isCustomerDropdownOpen }"
+                      @click.stop="toggleCustomerPicker"
+                    >
+                      <div class="picker-selected-label">
+                        <span class="bold-text">{{ selectedCustomerLabel }}</span>
+                      </div>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" class="picker-chevron" :class="{ rotated: isCustomerDropdownOpen }">
+                        <polyline points="6 9 12 15 18 9"/>
+                      </svg>
+                    </div>
+
+                    <!-- Dropdown Panel with search box inside -->
+                    <div v-if="isCustomerDropdownOpen" class="picker-dropdown-panel" @click.stop>
+                      <div class="picker-search-header" @click.stop>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" class="search-icon">
+                          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        </svg>
+                        <input
+                          ref="customerSearchInputRef"
+                          type="text"
+                          v-model="customerSearchQuery"
+                          placeholder="Type to search IndexedDB customer list by name, code, or phone…"
+                          class="picker-search-input"
+                          @click.stop
+                          @keydown.stop
+                        />
+                        <button v-if="customerSearchQuery" class="clear-search-btn" @click.stop="customerSearchQuery = ''" title="Clear search">✕</button>
+                      </div>
+
+                      <div class="picker-options-list" @click.stop>
+                        <div v-if="filteredCustomers.length === 0" class="picker-no-results">
+                          No matching customers found in local IndexedDB. Click <strong>Update Customer List</strong> to fetch from server.
+                        </div>
+                        <div
+                          v-for="c in filteredCustomers"
+                          :key="c.name"
+                          class="picker-option-item"
+                          :class="{ selected: editedCustomer === c.name }"
+                          @click.stop="selectCustomer(c.name)"
+                        >
+                          <div class="option-title bold-text">{{ c.customer_name }}</div>
+                          <div class="option-details">
+                            <span class="option-id">{{ c.name }}</span>
+                            <span v-if="c.mobile_no" class="option-phone"> • 📞 {{ c.mobile_no }}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p v-if="isBlocked || (invoiceDoc?.customer || '').startsWith('OFFLINE-')" class="frappe-control-tip warning-tip">
+                    ⚠️ Temporary customer "{{ invoiceDoc?.customer }}" is not synced. Select a real customer above (or click Update Customer List) to unblock this invoice.
+                  </p>
+                </div>
               </div>
 
-              <div class="frappe-control">
-                <div class="frappe-control-label">Posting Date & Time</div>
-                <div class="frappe-control-value">{{ formattedDate }} {{ formattedTime }}</div>
-              </div>
+              <!-- Metadata Grid -->
+              <div class="frappe-control-grid">
+                <div class="frappe-control">
+                  <div class="frappe-control-label">Posting Date & Time</div>
+                  <div class="frappe-control-value">{{ formattedDate }} {{ formattedTime }}</div>
+                </div>
 
-              <div class="frappe-control">
-                <div class="frappe-control-label">Company</div>
-                <div class="frappe-control-value">{{ invoiceDoc?.company }}</div>
-              </div>
+                <div class="frappe-control">
+                  <div class="frappe-control-label">Company</div>
+                  <div class="frappe-control-value">{{ invoiceDoc?.company }}</div>
+                </div>
 
-              <div class="frappe-control">
-                <div class="frappe-control-label">POS Profile / Warehouse</div>
-                <div class="frappe-control-value">
-                  {{ invoiceDoc?.pos_profile }}
-                  <template v-if="invoiceDoc?.set_warehouse"> ({{ invoiceDoc.set_warehouse }})</template>
+                <div class="frappe-control">
+                  <div class="frappe-control-label">POS Profile / Warehouse</div>
+                  <div class="frappe-control-value">
+                    {{ invoiceDoc?.pos_profile }}
+                    <template v-if="invoiceDoc?.set_warehouse"> ({{ invoiceDoc.set_warehouse }})</template>
+                  </div>
                 </div>
               </div>
             </div>
@@ -154,17 +240,23 @@
                       </div>
                     </td>
                     <td class="text-right readonly-cell bold-text">
-                      {{ line.qty }} <span class="uom-text">{{ line.stock_uom || line.uom || '' }}</span>
+                      {{ line.qty }} <span class="uom-text">{{ line.uom || line.stock_uom || '' }}</span>
+                      <div v-if="line.stock_uom && line.uom && line.stock_uom !== line.uom" class="frappe-sub-stock-qty" title="Inventory Stock Qty">
+                        ({{ getStockQty(line) }} {{ line.stock_uom }})
+                      </div>
                     </td>
                     <td class="text-right readonly-cell">{{ formatCurrency(line.rate) }}</td>
                     <td class="text-right readonly-cell bold-text">{{ formatCurrency(line.qty * line.rate) }}</td>
                     <td>
                       <div class="frappe-bs-cell">
-                        <!-- Realtime Item Auto Assign Button -->
+                        <!-- Realtime Item Auto Assign Button & Required Stock Badge -->
                         <div
                           class="frappe-bs-head"
                           v-if="line.has_batch_no || line.has_serial_no || line.batch_no !== undefined || line.serial_no !== undefined"
                         >
+                          <div class="frappe-bs-stock-badge" title="Required Total Stock Quantity">
+                            Req Stock: <strong>{{ getStockQty(line) }} {{ line.stock_uom || line.uom || '' }}</strong>
+                          </div>
                           <button
                             class="frappe-link-btn"
                             :class="{ 'btn-reloading': refreshingItemCode === line.item_code }"
@@ -212,7 +304,7 @@
 
                         <!-- Serial Dropdown & Tags -->
                         <div v-if="line.has_serial_no || line.serial_no !== undefined" class="frappe-field">
-                          <label class="frappe-field-label">Serial No(s) (Required: {{ line.qty }})</label>
+                          <label class="frappe-field-label">Serial No(s) (Required: {{ getStockQty(line) }} {{ line.stock_uom || '' }})</label>
                           
                           <!-- Serial Pills -->
                           <div class="frappe-pills-wrap" v-if="getLineSerialsArray(line).length > 0">
@@ -336,9 +428,79 @@ const isRefreshingStock = ref(false);
 const refreshingItemCode = ref<string | null>(null);
 const reloadedItemsMap = ref<Record<string, boolean>>({});
 
-// Editable copy of items & payments
+function getStockQty(line: any): number {
+  if (!line) return 0;
+  if (line.stock_qty !== undefined && line.stock_qty !== null && line.stock_qty !== 0) {
+    return Number(line.stock_qty);
+  }
+  const factor = Number(line.conversion_factor) || 1;
+  return (Number(line.qty) || 0) * factor;
+}
+
+// Editable copy of items & payments & customer
 const editedItems = ref<any[]>([]);
 const editedPayments = ref<any[]>([]);
+const editedCustomer = ref<string>('');
+const isRefreshingCustomers = ref<boolean>(false);
+const customerSearchQuery = ref<string>('');
+const isCustomerDropdownOpen = ref<boolean>(false);
+const customerSearchInputRef = ref<HTMLInputElement | null>(null);
+
+function toggleCustomerPicker() {
+  isCustomerDropdownOpen.value = !isCustomerDropdownOpen.value;
+  if (isCustomerDropdownOpen.value) {
+    setTimeout(() => {
+      customerSearchInputRef.value?.focus();
+    }, 50);
+  }
+}
+
+function selectCustomer(custName: string) {
+  editedCustomer.value = custName;
+  isCustomerDropdownOpen.value = false;
+}
+
+const selectedCustomerLabel = computed(() => {
+  if (!editedCustomer.value) return '-- Select Customer --';
+  const found = pos.customers.find((c: any) => c.name === editedCustomer.value);
+  if (found) {
+    return `${found.customer_name} (${found.name})${found.mobile_no ? ` - 📞 ${found.mobile_no}` : ''}`;
+  }
+  return editedCustomer.value;
+});
+
+const filteredCustomers = computed(() => {
+  const list = pos.customers || [];
+  const q = customerSearchQuery.value.trim().toLowerCase();
+  if (!q) return list;
+  const filtered = list.filter((c: any) =>
+    (c.customer_name || '').toLowerCase().includes(q) ||
+    (c.name || '').toLowerCase().includes(q) ||
+    (c.mobile_no || '').toLowerCase().includes(q) ||
+    (c.email_id || '').toLowerCase().includes(q)
+  );
+  if (editedCustomer.value && !filtered.some((c: any) => c.name === editedCustomer.value)) {
+    const selectedObj = list.find((c: any) => c.name === editedCustomer.value);
+    if (selectedObj) filtered.unshift(selectedObj);
+  }
+  return filtered;
+});
+
+async function refreshCustomersFromServer() {
+  isRefreshingCustomers.value = true;
+  saveSuccessMsg.value = null;
+  try {
+    saveSuccessMsg.value = 'Fetching latest customer list from ERPNext server…';
+    await pos.prefetchAllCustomers();
+    await pos.loadCustomers();
+    saveSuccessMsg.value = `✓ Fresh customer list updated from server! (${pos.customers.length} customers in IndexedDB)`;
+    setTimeout(() => { saveSuccessMsg.value = null; }, 3500);
+  } catch (err: any) {
+    alert('Failed to refresh customer list: ' + (err?.message || 'Unknown error'));
+  } finally {
+    isRefreshingCustomers.value = false;
+  }
+}
 
 const invoiceDoc = computed(() => {
   if (!props.item) return null;
@@ -492,7 +654,7 @@ async function autoAssignItem(line: any) {
       await pos.loadMasterData();
     }
 
-    const allocs = pos.autoSelectSerialsAndBatches(line.item_code, Number(line.qty));
+    const allocs = pos.autoSelectSerialsAndBatches(line.item_code, getStockQty(line));
     if (allocs && allocs.length > 0) {
       const batches = Array.from(new Set(allocs.map((a: any) => a.batch_no).filter(Boolean)));
       if (batches.length > 0) {
@@ -535,7 +697,7 @@ async function autoAssignAll() {
     const updatedCodes: string[] = [];
     for (const line of editedItems.value) {
       if (line.has_batch_no || line.has_serial_no || line.batch_no !== undefined || line.serial_no !== undefined) {
-        const allocs = pos.autoSelectSerialsAndBatches(line.item_code, Number(line.qty));
+        const allocs = pos.autoSelectSerialsAndBatches(line.item_code, getStockQty(line));
         if (allocs && allocs.length > 0) {
           const batches = Array.from(new Set(allocs.map((a: any) => a.batch_no).filter(Boolean)));
           if (batches.length > 0) line.batch_no = batches.join(', ');
@@ -575,7 +737,12 @@ watch(
         serial_no: i.serial_no || '',
       }));
       editedPayments.value = (doc?.payments || []).map((p: any) => ({ ...p }));
+      editedCustomer.value = doc?.customer || '';
       saveSuccessMsg.value = null;
+
+      if (!pos.customers || !pos.customers.length) {
+        pos.loadCustomers();
+      }
 
       if (!Object.keys(pos.serialBatchMap || {}).length) {
         pos.loadMasterData();
@@ -583,6 +750,7 @@ watch(
     } else {
       editedItems.value = [];
       editedPayments.value = [];
+      editedCustomer.value = '';
     }
   },
   { immediate: true }
@@ -600,6 +768,15 @@ async function saveChanges() {
   try {
     const payload = JSON.parse(JSON.stringify(props.item.payload));
     const targetDoc = payload.invoice || payload.doc || payload;
+
+    if (editedCustomer.value && editedCustomer.value.trim()) {
+      const cName = editedCustomer.value.trim();
+      targetDoc.customer = cName;
+      const foundCust = pos.customers.find((c: any) => c.name === cName);
+      if (foundCust && foundCust.customer_name) {
+        targetDoc.customer_name = foundCust.customer_name;
+      }
+    }
 
     targetDoc.items = editedItems.value.map((i: any) => {
       const itemObj: any = { ...i };
@@ -799,20 +976,167 @@ async function saveChanges() {
   justify-content: space-between;
 }
 
+.frappe-details-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: #f8fafc;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+.frappe-customer-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.frappe-customer-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
 /* Control Grid (Field Columns) */
 .frappe-control-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 16px;
-  background: #f8fafc;
-  padding: 14px 16px;
-  border-radius: 6px;
-  border: 1px solid #e2e8f0;
 }
 .frappe-control-label {
   font-size: 12px;
   color: #6c767e;
   margin-bottom: 3px;
+}
+.frappe-customer-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.frappe-customer-input-row .frappe-searchable-picker {
+  flex: 1;
+}
+.frappe-searchable-picker {
+  position: relative;
+  width: 100%;
+}
+.picker-trigger-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 6px 12px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+.picker-trigger-box:hover {
+  border-color: #94a3b8;
+}
+.picker-trigger-box.active {
+  border-color: #2490ef;
+  box-shadow: 0 0 0 2px rgba(36, 144, 239, 0.15);
+}
+.picker-trigger-box.control-blocked {
+  border-color: #f59e0b;
+  background: #fffbe6;
+}
+.picker-selected-label {
+  font-size: 13px;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-chevron {
+  color: #64748b;
+  transition: transform 0.2s ease;
+}
+.picker-chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.picker-dropdown-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+  overflow: hidden;
+}
+.picker-search-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+.picker-search-header .search-icon {
+  position: absolute;
+  left: 18px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+.picker-search-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 28px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #0f172a;
+  background: #ffffff;
+}
+.picker-search-input:focus {
+  outline: none;
+  border-color: #2490ef;
+}
+.picker-options-list {
+  overflow-y: auto;
+  flex: 1;
+  max-height: 210px;
+  padding: 4px 0;
+}
+.picker-no-results {
+  padding: 16px;
+  font-size: 12px;
+  color: #64748b;
+  text-align: center;
+  line-height: 1.5;
+}
+.picker-option-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.picker-option-item:hover {
+  background: #f1f5f9;
+}
+.picker-option-item.selected {
+  background: #eff6ff;
+  border-left: 3px solid #2490ef;
+}
+.option-title {
+  font-size: 13px;
+  color: #0f172a;
+}
+.option-details {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 1px;
 }
 .frappe-control-value {
   font-size: 13px;
@@ -910,6 +1234,13 @@ async function saveChanges() {
   gap: 4px;
 }
 
+.frappe-sub-stock-qty {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
 .frappe-bs-cell {
   display: flex;
   flex-direction: column;
@@ -917,7 +1248,22 @@ async function saveChanges() {
 }
 .frappe-bs-head {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.frappe-bs-stock-badge {
+  font-size: 11px;
+  color: #475569;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+.frappe-bs-stock-badge strong {
+  color: #0f172a;
+  font-weight: 700;
 }
 .frappe-link-btn {
   background: none;

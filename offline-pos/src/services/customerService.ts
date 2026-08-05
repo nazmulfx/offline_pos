@@ -32,25 +32,42 @@ export async function fetchCustomers(opts: FetchCustomersOptions): Promise<any[]
         filters.customer_group = ['in', customerGroups];
       }
 
-      const result = await call('frappe.client.get_list', {
-        doctype: 'Customer',
-        filters,
-        or_filters: search
-          ? {
-              customer_name: ['like', `%${search}%`],
-              name: ['like', `%${search}%`],
-              mobile_no: ['like', `%${search}%`],
-            }
-          : undefined,
-        fields: ['name', 'customer_name', 'mobile_no', 'email_id', 'customer_group', 'loyalty_program'],
-        limit_page_length: 50,
-      });
+      let allFetchedCustomers: any[] = [];
+      let start = 0;
+      const batchSize = 1000;
+      let hasMore = true;
 
-      const customers: any[] = result || [];
-      if (customers.length > 0) {
-        await cacheCustomers(customers);
+      while (hasMore) {
+        const result = await call('frappe.client.get_list', {
+          doctype: 'Customer',
+          filters,
+          or_filters: search
+            ? {
+                customer_name: ['like', `%${search}%`],
+                name: ['like', `%${search}%`],
+                mobile_no: ['like', `%${search}%`],
+              }
+            : undefined,
+          fields: ['name', 'customer_name', 'mobile_no', 'email_id', 'customer_group', 'loyalty_program'],
+          limit_start: start,
+          limit_page_length: batchSize,
+        });
+
+        const batch: any[] = result || [];
+        if (batch.length > 0) {
+          allFetchedCustomers.push(...batch);
+          await cacheCustomers(batch);
+          console.log(`[CustomerService] Cached customer batch ${start} to ${start + batch.length}`);
+        }
+
+        if (batch.length < batchSize) {
+          hasMore = false;
+        } else {
+          start += batchSize;
+        }
       }
-      return customers;
+
+      return allFetchedCustomers;
     } catch (err) {
       console.warn('[CustomerService] API failed, falling back to IndexedDB:', err);
     }

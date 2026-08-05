@@ -2218,7 +2218,7 @@ export const usePOSStore = defineStore('pos', () => {
     selectCartItem, updateCartItemWarehouse, updateCartItemUOM, updateCartItemConversionFactor, updateCartItemPrice,
     clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData, decrementStock, checkCartStock,
     // Serial & Batch
-    serialBatchMap, pickStrategy, getAvailableStockPool, autoSelectSerialsAndBatches, handleCartItemQtyChange, handleBarcodeScanOrSearch, refreshSerialBatchDataFromServer,
+    serialBatchMap, pickStrategy, getAvailableStockPool, autoSelectSerialsAndBatches, handleCartItemQtyChange, handleBarcodeScanOrSearch, refreshSerialBatchDataFromServer, refreshItemSerialBatchDataFromServer,
     // designed alert & toast
     activeAlert, showAlert, closeAlert, saveFailedOnlineInvoiceToSyncQueue, toast, showToast,
     // Totals

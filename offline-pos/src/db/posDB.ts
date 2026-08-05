@@ -233,7 +233,7 @@ export async function getCachedCustomers(search: string = ''): Promise<any[]> {
             c.mobile_no?.toLowerCase().includes(s)
         );
       }
-      resolve(results.slice(0, 50));
+      resolve(results);
     };
     req.onerror = () => reject(req.error);
   });

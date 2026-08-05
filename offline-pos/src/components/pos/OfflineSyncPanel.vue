@@ -6,7 +6,7 @@
   <Teleport to="body">
     <!-- Backdrop -->
     <Transition name="osp-backdrop">
-      <div v-if="isOpen" class="osp-backdrop" @click="$emit('close')" />
+      <div v-if="isOpen" class="osp-backdrop" @click.self="handleBackdropClick" />
     </Transition>
 
     <!-- Panel -->
@@ -206,12 +206,12 @@
                     </button>
                   </div>
                 </div>
-                <!-- Per-item error reason -->
-                <div v-if="isFailed(item.id)" class="osp-item-error" :class="{ 'osp-item-error--warn': isBlocked(item) }">
+                <!-- Per-item error / blocked reason -->
+                <div v-if="isFailed(item) || isBlocked(item)" class="osp-item-error" :class="{ 'osp-item-error--warn': isBlocked(item) }">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" class="osp-item-error__icon">
                     <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
                   </svg>
-                  <span>{{ getError(item.id) }}</span>
+                  <span>{{ isBlocked(item) ? `Blocked: Temporary customer "${item.payload?.invoice?.customer || ''}" not synced. Click View Details to reassign customer.` : getError(item) }}</span>
                 </div>
               </div>
             </div>
@@ -287,6 +287,11 @@ function openInvoiceModal(item: any) {
 function closeInvoiceModal() {
   isInvoiceModalOpen.value = false;
   selectedInvoiceItem.value = null;
+}
+
+function handleBackdropClick() {
+  if (isInvoiceModalOpen.value) return;
+  emit('close');
 }
 
 const customerItems = computed(() => allItems.value.filter(i => i.action === 'save_customer'));
