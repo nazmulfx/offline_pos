@@ -25,5 +25,21 @@ frappe.query_reports["POS Sales & Collection"] = {
 			default: frappe.datetime.get_today(),
 			reqd: 1,
 		},
+		{
+			fieldname: "show_collection_payment",
+			label: __("Show Collection by Payment Entry"),
+			fieldtype: "Check",
+			default: 1,
+		},
 	],
+	formatter: function (value, row, column, data, default_formatter) {
+		value = default_formatter(value, row, column, data);
+		if (data && data.is_payment_entry && value) {
+			value = `<span style="color: #2563eb; font-weight: bold;">${value}</span>`;
+			value = value.replace(/<a /g, '<a style="color: #2563eb !important; font-weight: bold;" ');
+		} else if (data && data.bold) {
+			value = value.bold();
+		}
+		return value;
+	},
 };
