@@ -5,7 +5,7 @@
 <template>
   <Teleport to="body">
     <Transition name="modal">
-      <div v-if="pos.activeAlert" class="alert-overlay" @click.self="pos.closeAlert">
+      <div v-if="pos.activeAlert" class="alert-overlay" @click.self="handleOverlayClick">
         <div class="alert-modal" :class="`alert-modal--${alertType}`">
           <div class="alert-modal__icon">
             <!-- Success icon -->
@@ -35,9 +35,32 @@
           </div>
           <h3 class="alert-modal__title">{{ pos.activeAlert.title }}</h3>
           <p class="alert-modal__message">{{ pos.activeAlert.message }}</p>
-          <button class="alert-modal__btn" @click="pos.closeAlert">
-            Dismiss
-          </button>
+
+          <div class="alert-modal__actions">
+            <!-- For Invoice Submission Errors: Only single primary action button -->
+            <button
+              v-if="pos.activeAlert.onSaveToQueue"
+              class="alert-modal__btn alert-modal__btn--save"
+              :disabled="isSaving"
+              @click="handleSaveToQueue"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="margin-right: 6px;">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+              <span>{{ isSaving ? 'Saving…' : (pos.activeAlert.saveToQueueText || 'Save Invoice to Sync Queue') }}</span>
+            </button>
+
+            <!-- Standard Dismiss button for general alerts -->
+            <button
+              v-else
+              class="alert-modal__btn"
+              @click="pos.closeAlert"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       </div>
     </Transition>
@@ -45,9 +68,31 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { usePOSStore } from '../../stores/posStore';
 const pos = usePOSStore();
+const isSaving = ref(false);
+
+async function handleSaveToQueue() {
+  if (!pos.activeAlert?.onSaveToQueue || isSaving.value) return;
+  isSaving.value = true;
+  try {
+    await pos.activeAlert.onSaveToQueue();
+    pos.closeAlert();
+  } catch (err: any) {
+    alert('Failed to save invoice to sync queue: ' + (err?.message || 'Unknown error'));
+  } finally {
+    isSaving.value = false;
+  }
+}
+
+function handleOverlayClick() {
+  if (pos.activeAlert?.onSaveToQueue) {
+    handleSaveToQueue();
+  } else {
+    pos.closeAlert();
+  }
+}
 
 const isStockAlert = computed(() => {
   const title = pos.activeAlert?.title || '';
@@ -87,7 +132,7 @@ const alertType = computed(() => {
   border: 1px solid var(--pos-border, #e2e8f0);
   border-radius: 16px;
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
   padding: 32px 24px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   display: flex;
@@ -122,6 +167,13 @@ const alertType = computed(() => {
   white-space: pre-line;
 }
 
+.alert-modal__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
 .alert-modal__btn {
   width: 100%;
   padding: 11px;
@@ -132,10 +184,34 @@ const alertType = computed(() => {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .alert-modal__btn:active {
   transform: scale(0.98);
+}
+
+.alert-modal__btn--save {
+  background: #2563eb !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25) !important;
+}
+.alert-modal__btn--save:hover {
+  background: #1d4ed8 !important;
+  transform: translateY(-1px);
+}
+
+.alert-modal__btn--secondary {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  box-shadow: none !important;
+  border: 1px solid #cbd5e1 !important;
+}
+.alert-modal__btn--secondary:hover {
+  background: #e2e8f0 !important;
+  color: #1e293b !important;
 }
 
 /* Success Alert Styles */

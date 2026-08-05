@@ -6,7 +6,7 @@
   <Teleport to="body">
     <!-- Backdrop -->
     <Transition name="osp-backdrop">
-      <div v-if="isOpen" class="osp-backdrop" @click="$emit('close')" />
+      <div v-if="isOpen" class="osp-backdrop" @click.self="handleBackdropClick" />
     </Transition>
 
     <!-- Panel -->
@@ -195,14 +195,23 @@
                       Pending
                     </span>
                     <span class="osp-item__time">{{ formatTime(item.created_at) }}</span>
+
+                    <!-- View Details Button inside Invoice Row -->
+                    <button class="osp-view-btn" @click.stop="openInvoiceModal(item)" title="View Invoice Details">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                      </svg>
+                      View Details
+                    </button>
                   </div>
                 </div>
-                <!-- Per-item error reason -->
-                <div v-if="isFailed(item.id)" class="osp-item-error" :class="{ 'osp-item-error--warn': isBlocked(item) }">
+                <!-- Per-item error / blocked reason -->
+                <div v-if="isFailed(item) || isBlocked(item)" class="osp-item-error" :class="{ 'osp-item-error--warn': isBlocked(item) }">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" class="osp-item-error__icon">
                     <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
                   </svg>
-                  <span>{{ getError(item.id) }}</span>
+                  <span>{{ isBlocked(item) ? `Blocked: Temporary customer "${item.payload?.invoice?.customer || ''}" not synced. Click View Details to reassign customer.` : getError(item) }}</span>
                 </div>
               </div>
             </div>
@@ -236,6 +245,15 @@
         </div>
       </div>
     </Transition>
+
+    <!-- Invoice Details Modal -->
+    <PendingInvoiceModal
+      :is-open="isInvoiceModalOpen"
+      :item="selectedInvoiceItem"
+      :error-message="selectedInvoiceItem ? getError(selectedInvoiceItem) : null"
+      @close="closeInvoiceModal"
+      @updated="loadQueue"
+    />
   </Teleport>
 </template>
 
@@ -246,6 +264,7 @@ import { useSyncStore } from '../../stores/syncStore';
 import { usePOSStore } from '../../stores/posStore';
 import { getSyncQueue } from '../../db/posDB';
 import { formatCurrency as globalFormatCurrency } from '../../lib/currency';
+import PendingInvoiceModal from './PendingInvoiceModal.vue';
 
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -256,6 +275,24 @@ const pos = usePOSStore();
 
 const isLoading = ref(false);
 const allItems = ref<any[]>([]);
+
+const isInvoiceModalOpen = ref(false);
+const selectedInvoiceItem = ref<any>(null);
+
+function openInvoiceModal(item: any) {
+  selectedInvoiceItem.value = item;
+  isInvoiceModalOpen.value = true;
+}
+
+function closeInvoiceModal() {
+  isInvoiceModalOpen.value = false;
+  selectedInvoiceItem.value = null;
+}
+
+function handleBackdropClick() {
+  if (isInvoiceModalOpen.value) return;
+  emit('close');
+}
 
 const customerItems = computed(() => allItems.value.filter(i => i.action === 'save_customer'));
 const invoiceItems  = computed(() => allItems.value.filter(i => i.action === 'submit_invoice'));
@@ -274,12 +311,18 @@ const statusText = computed(() => {
   return `Online — ${totalPending.value} item(s) ready to sync`;
 });
 
-function isFailed(id: number): boolean {
-  return id in sync.failedItems;
+function isFailed(item: any): boolean {
+  if (!item) return false;
+  const id = typeof item === 'object' ? item.id : item;
+  const itemObj = typeof item === 'object' ? item : allItems.value.find((i: any) => i.id === id);
+  return (id in sync.failedItems) || !!(itemObj && (itemObj.sync_error || itemObj.last_error));
 }
 
-function getError(id: number): string {
-  return sync.failedItems[id] || 'Unknown error';
+function getError(item: any): string {
+  if (!item) return '';
+  const id = typeof item === 'object' ? item.id : item;
+  const itemObj = typeof item === 'object' ? item : allItems.value.find((i: any) => i.id === id);
+  return itemObj?.sync_error || itemObj?.last_error || sync.failedItems[id] || '';
 }
 
 function isBlocked(item: any): boolean {
@@ -695,6 +738,29 @@ watch(() => sync.isSyncing, (syncing) => { if (!syncing && props.isOpen) loadQue
 .osp-spin--lg { width: 24px; height: 24px; border-width: 3px; }
 
 @keyframes osp-rot { to { transform: rotate(360deg); } }
+
+/* ── View Button Inside Invoice Row ───────────────────────── */
+.osp-view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 3px 9px;
+  background: rgba(99, 102, 241, 0.08);
+  color: #6366f1;
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.osp-view-btn:hover {
+  background: #6366f1;
+  color: #ffffff;
+  border-color: #6366f1;
+}
+
 @keyframes osp-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(1.4); }

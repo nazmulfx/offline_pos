@@ -233,7 +233,7 @@ export async function getCachedCustomers(search: string = ''): Promise<any[]> {
             c.mobile_no?.toLowerCase().includes(s)
         );
       }
-      resolve(results.slice(0, 50));
+      resolve(results);
     };
     req.onerror = () => reject(req.error);
   });
@@ -326,6 +326,49 @@ export async function removeSyncItem(id: number): Promise<void> {
   return withStore<undefined>('sync_queue', 'readwrite', (store) =>
     store.delete(id) as IDBRequest<undefined>
   );
+}
+
+export async function updateSyncItemPayload(id: number, payload: any): Promise<void> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('sync_queue', 'readwrite');
+    const store = tx.objectStore('sync_queue');
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const existing = getReq.result;
+      if (!existing) return resolve();
+      existing.payload = payload;
+      delete existing.sync_error;
+      delete existing.last_error;
+      const putReq = store.put(existing);
+      putReq.onsuccess = () => resolve();
+      putReq.onerror = () => reject(putReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  });
+}
+
+export async function updateSyncItemError(id: number, errorMsg: string | null): Promise<void> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('sync_queue', 'readwrite');
+    const store = tx.objectStore('sync_queue');
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const existing = getReq.result;
+      if (!existing) return resolve();
+      if (errorMsg) {
+        existing.sync_error = errorMsg;
+      } else {
+        delete existing.sync_error;
+        delete existing.last_error;
+      }
+      const putReq = store.put(existing);
+      putReq.onsuccess = () => resolve();
+      putReq.onerror = () => reject(putReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  });
 }
 
 export async function getSyncQueueCount(): Promise<number> {
