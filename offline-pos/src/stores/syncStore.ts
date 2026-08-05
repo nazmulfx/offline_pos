@@ -17,6 +17,7 @@ import {
   markInvoiceSynced,
   updateCustomerNameInQueue,
   removeOfflineCustomer,
+  updateSyncItemError,
 } from '../db/posDB';
 import call from '../lib/call';
 import { auth } from '../lib/auth';
@@ -199,6 +200,7 @@ export const useSyncStore = defineStore('sync', () => {
         } catch (err: any) {
           const msg = extractErrorMessage(err);
           failedItems.value[item.id] = msg;
+          await updateSyncItemError(item.id, msg);
           errors.push('Invoice: ' + msg);
           console.error('[SyncStore] Invoice sync failed id=' + item.id, err);
           if (isAuthError(err)) {
@@ -335,6 +337,35 @@ export const useSyncStore = defineStore('sync', () => {
     if (docToSubmit.docstatus === 1) {
       console.log(`[SyncStore] Invoice ${docToSubmit.name} is already submitted on server.`);
     } else {
+      // Update draft document on server with latest batch/serial allocations before submitting
+      const localItems = invoice.items || [];
+      if (docToSubmit.items && localItems.length > 0) {
+        docToSubmit.items = docToSubmit.items.map((serverLine: any, idx: number) => {
+          const localLine = localItems[idx] || localItems.find((l: any) => l.item_code === serverLine.item_code);
+          if (!localLine) return serverLine;
+
+          const updatedLine = { ...serverLine };
+          if (localLine.batch_no && localLine.batch_no.trim()) {
+            updatedLine.batch_no = localLine.batch_no.trim();
+            updatedLine.use_serial_batch_fields = 1;
+          } else {
+            delete updatedLine.batch_no;
+          }
+
+          if (localLine.serial_no && localLine.serial_no.trim()) {
+            updatedLine.serial_no = localLine.serial_no.trim();
+            updatedLine.use_serial_batch_fields = 1;
+          } else {
+            delete updatedLine.serial_no;
+          }
+
+          return updatedLine;
+        });
+
+        console.log(`[SyncStore] Saving updated batch & serial allocations to server draft invoice ${docToSubmit.name}...`);
+        docToSubmit = await call('frappe.client.save', { doc: docToSubmit }, { skipAuthRedirect: true });
+      }
+
       await call('frappe.client.submit', { doc: docToSubmit }, { skipAuthRedirect: true });
     }
 
@@ -371,6 +402,13 @@ export const useSyncStore = defineStore('sync', () => {
     );
   }
 
+  async function clearFailedItem(id: number) {
+    if (failedItems.value[id]) {
+      delete failedItems.value[id];
+    }
+    await updateSyncItemError(id, null);
+  }
+
   return {
     pendingCount,
     isSyncing,
@@ -382,5 +420,6 @@ export const useSyncStore = defineStore('sync', () => {
     refreshPendingCount,
     refreshCSRFToken,
     lastSyncedInvoiceCount,
+    clearFailedItem,
   };
 });

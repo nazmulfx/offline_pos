@@ -328,6 +328,49 @@ export async function removeSyncItem(id: number): Promise<void> {
   );
 }
 
+export async function updateSyncItemPayload(id: number, payload: any): Promise<void> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('sync_queue', 'readwrite');
+    const store = tx.objectStore('sync_queue');
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const existing = getReq.result;
+      if (!existing) return resolve();
+      existing.payload = payload;
+      delete existing.sync_error;
+      delete existing.last_error;
+      const putReq = store.put(existing);
+      putReq.onsuccess = () => resolve();
+      putReq.onerror = () => reject(putReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  });
+}
+
+export async function updateSyncItemError(id: number, errorMsg: string | null): Promise<void> {
+  const db = await openPOSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('sync_queue', 'readwrite');
+    const store = tx.objectStore('sync_queue');
+    const getReq = store.get(id);
+    getReq.onsuccess = () => {
+      const existing = getReq.result;
+      if (!existing) return resolve();
+      if (errorMsg) {
+        existing.sync_error = errorMsg;
+      } else {
+        delete existing.sync_error;
+        delete existing.last_error;
+      }
+      const putReq = store.put(existing);
+      putReq.onsuccess = () => resolve();
+      putReq.onerror = () => reject(putReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
+  });
+}
+
 export async function getSyncQueueCount(): Promise<number> {
   const db = await openPOSDB();
   return new Promise((resolve, reject) => {
