@@ -29,6 +29,14 @@ export interface POSItem {
   has_serial_no?: number;
 }
 
+export interface POSAlertConfig {
+  title: string;
+  message: string;
+  type?: 'success' | 'warning' | 'info' | 'error';
+  onSaveToQueue?: () => Promise<void> | void;
+  saveToQueueText?: string;
+}
+
 export interface CartItemAllocation {
   batch_no: string;
   serial_no: string; // Newline-separated serials
@@ -166,14 +174,71 @@ export const usePOSStore = defineStore('pos', () => {
   const warehouses = ref<string[]>([]);
 
   // ─── Designed Alert Modal ──────────────────────────────────────────────────
-  const activeAlert = ref<{ title: string; message: string; type?: 'success' | 'warning' | 'info' | 'error' } | null>(null);
+  const activeAlert = ref<POSAlertConfig | null>(null);
 
-  function showAlert(title: string, message: string, type?: 'success' | 'warning' | 'info' | 'error') {
-    activeAlert.value = { title, message, type };
+  function showAlert(
+    title: string,
+    message: string,
+    type?: 'success' | 'warning' | 'info' | 'error' | POSAlertConfig,
+    onSaveToQueue?: () => Promise<void> | void,
+    saveToQueueText?: string
+  ) {
+    if (typeof type === 'object' && type !== null) {
+      activeAlert.value = type;
+    } else {
+      activeAlert.value = { title, message, type: typeof type === 'string' ? type : 'error', onSaveToQueue, saveToQueueText };
+    }
   }
 
   function closeAlert() {
     activeAlert.value = null;
+  }
+
+  // ─── Toast Notifications ──────────────────────────────────────────────────
+  const toast = ref<{ title: string; message: string; type?: 'success' | 'warning' | 'info' | 'error' } | null>(null);
+
+  function showToast(title: string, message: string, type: 'success' | 'warning' | 'info' | 'error' = 'success') {
+    toast.value = { title, message, type };
+    setTimeout(() => {
+      if (toast.value?.title === title) {
+        toast.value = null;
+      }
+    }, 5500);
+  }
+
+  async function saveFailedOnlineInvoiceToSyncQueue(doc: any, errorText: string): Promise<boolean> {
+    try {
+      const { saveDraftInvoice, addToSyncQueue, updateSyncItemError, getSyncQueue } = await import('../db/posDB');
+      const { useSyncStore } = await import('./syncStore');
+
+      const localId = await saveDraftInvoice(doc);
+      await addToSyncQueue('submit_invoice', { invoice: doc, local_id: localId });
+
+      const queue = await getSyncQueue();
+      const lastItem = queue.find((q: any) => q.payload?.local_id === localId || (doc.name && q.payload?.invoice?.name === doc.name));
+      if (lastItem) {
+        await updateSyncItemError(lastItem.id, errorText);
+      }
+
+      const syncStore = useSyncStore();
+      await syncStore.refreshPendingCount();
+
+      clearCart();
+      if (currentDraftId.value !== null) {
+        await discardHeldInvoice(currentDraftId.value);
+      }
+
+      showToast(
+        'Saved to Sync Queue',
+        `Invoice ${doc.name || 'Draft'} saved to Sync Queue. Update details there and submit again.`,
+        'success'
+      );
+
+      return true;
+    } catch (err) {
+      console.error('[posStore] Failed to save online error invoice to sync queue:', err);
+      return false;
+    }
   }
 
   // Watchers to persist state
@@ -2154,8 +2219,8 @@ export const usePOSStore = defineStore('pos', () => {
     clearCart, setAdditionalDiscountPercent, setAdditionalDiscountAmount, fetchItemDetailsOfflineData, decrementStock, checkCartStock,
     // Serial & Batch
     serialBatchMap, pickStrategy, getAvailableStockPool, autoSelectSerialsAndBatches, handleCartItemQtyChange, handleBarcodeScanOrSearch, refreshSerialBatchDataFromServer,
-    // designed alert
-    activeAlert, showAlert, closeAlert,
+    // designed alert & toast
+    activeAlert, showAlert, closeAlert, saveFailedOnlineInvoiceToSyncQueue, toast, showToast,
     // Totals
     subtotal, totalDiscount, grandTotal, roundedTotal, roundingAdjustment, cartCount, taxes, totalTaxes,
     // Held Invoices

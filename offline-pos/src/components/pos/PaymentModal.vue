@@ -340,7 +340,21 @@ async function submitPayment() {
       if (errText.includes('CSRFTokenError') || errText.includes('Invalid Request')) {
         pos.showAlert('CSRF Token Error', 'Your security session has expired. Please reload the page to post data to the online server.', 'error');
       } else {
-        pos.showAlert('Payment Error', errText);
+        const docToSave = result.doc;
+        const serverName = result.serverInvoiceName;
+        pos.showAlert(
+          'Payment / Submit Error',
+          errText,
+          'error',
+          async () => {
+            if (docToSave) {
+              if (serverName) docToSave.name = serverName;
+              await pos.saveFailedOnlineInvoiceToSyncQueue(docToSave, errText);
+              close();
+            }
+          },
+          serverName ? `Save Invoice to Sync Queue (${serverName})` : 'Save Invoice to Sync Queue'
+        );
       }
     }
   } catch (err: any) {

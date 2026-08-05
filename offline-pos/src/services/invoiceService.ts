@@ -287,9 +287,10 @@ export async function submitInvoice(payload: CreateInvoicePayload): Promise<{
   }
 
   if (payload.isOnline) {
+    let insertedDoc: any = null;
     try {
       // Step 1: Insert the document (applies all server-side defaults & validation)
-      const insertedDoc = await call('frappe.client.insert', { doc });
+      insertedDoc = await call('frappe.client.insert', { doc });
 
       if (!insertedDoc || !insertedDoc.name) {
         throw new Error('Failed to create invoice — no document returned');
@@ -327,13 +328,14 @@ export async function submitInvoice(payload: CreateInvoicePayload): Promise<{
       if (isConnectionError) {
         console.warn('[submitInvoice] Network/Server connection error detected. Falling back to offline save.', err);
         try {
-          const localId = await saveDraftInvoice(doc);
-          await addToSyncQueue('submit_invoice', { invoice: doc, local_id: localId });
+          const targetDoc = insertedDoc || doc;
+          const localId = await saveDraftInvoice(targetDoc);
+          await addToSyncQueue('submit_invoice', { invoice: targetDoc, local_id: localId });
           return {
             success: true,
             localId,
             offline: true,
-            doc,
+            doc: targetDoc,
           };
         } catch (saveErr: any) {
           return {
@@ -346,6 +348,8 @@ export async function submitInvoice(payload: CreateInvoicePayload): Promise<{
       return {
         success: false,
         error: errorText,
+        serverInvoiceName: insertedDoc?.name,
+        doc: insertedDoc || doc,
       };
     }
   } else {
