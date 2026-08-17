@@ -18,6 +18,9 @@ def execute(filters: dict | None = None) -> tuple[list[dict], list[dict]]:
 	if filters.get("company"):
 		inv_filters["company"] = filters["company"]
 
+	if filters.get("pos_profile"):
+		inv_filters["pos_profile"] = filters["pos_profile"]
+
 	if filters.get("from_date") and filters.get("to_date"):
 		inv_filters["posting_date"] = ["between", [filters["from_date"], filters["to_date"]]]
 	else:
@@ -27,7 +30,7 @@ def execute(filters: dict | None = None) -> tuple[list[dict], list[dict]]:
 	invoices = frappe.get_all(
 		"Sales Invoice",
 		filters=inv_filters,
-		fields=["name", "customer", "grand_total", "status", "outstanding_amount", "outstanding_on_invoice_creation"],
+		fields=["name", "customer", "grand_total", "status", "outstanding_amount", "outstanding_on_invoice_creation", "pos_profile"],
 		order_by="posting_date desc, creation desc",
 	)
 
@@ -122,6 +125,16 @@ def execute(filters: dict | None = None) -> tuple[list[dict], list[dict]]:
 			}
 		)
 
+	columns.append(
+		{
+			"label": _("POS Profile"),
+			"fieldname": "pos_profile",
+			"fieldtype": "Link",
+			"options": "POS Profile",
+			"width": 140,
+		}
+	)
+
 	# 5. Build data rows
 	data = []
 
@@ -136,6 +149,7 @@ def execute(filters: dict | None = None) -> tuple[list[dict], list[dict]]:
 			"status": inv["status"],
 			"outstanding_amount": inv["outstanding_amount"],
 			"outstanding_on_invoice_creation": inv.get("outstanding_on_invoice_creation") or 0.0,
+			"pos_profile": inv.get("pos_profile") or "",
 		}
 		if show_collection_payment:
 			row["payment_entry"] = ""
@@ -159,6 +173,7 @@ def execute(filters: dict | None = None) -> tuple[list[dict], list[dict]]:
 				"status": "Submitted",
 				"outstanding_amount": 0.0,
 				"outstanding_on_invoice_creation": 0.0,
+				"pos_profile": "",
 				"collected_amount": amt,
 				"is_payment_entry": 1,
 			}

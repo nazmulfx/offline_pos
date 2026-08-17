@@ -12,6 +12,12 @@ frappe.query_reports["POS Sales & Collection"] = {
 			reqd: 1,
 		},
 		{
+			fieldname: "pos_profile",
+			label: __("POS Profile"),
+			fieldtype: "Link",
+			options: "POS Profile",
+		},
+		{
 			fieldname: "from_date",
 			label: __("From Date"),
 			fieldtype: "Date",
