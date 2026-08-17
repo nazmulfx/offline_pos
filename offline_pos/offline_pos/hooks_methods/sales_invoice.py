@@ -3,6 +3,7 @@ import time
 import uuid
 import frappe
 
+from frappe.utils import flt
 from . utils import get_customer_outstanding
 
 def before_validate(doc, method=None):
@@ -15,8 +16,16 @@ def before_validate(doc, method=None):
     if doc.amended_from and doc.is_new():
         fetch_payments_from_older_invoice(doc)
 
+    set_outstanding_on_creation(doc)
+
 def before_submit(doc, method=None):
     doc.previous_outstanding = get_customer_outstanding(doc.customer, doc.company)
+    set_outstanding_on_creation(doc)
+
+def set_outstanding_on_creation(doc):
+    total = flt(doc.rounded_total) if doc.rounded_total else flt(doc.grand_total)
+    paid = flt(doc.paid_amount)
+    doc.outstanding_on_invoice_creation = total - paid
 
 
 def fetch_payments_from_older_invoice(doc):
