@@ -213,7 +213,8 @@
           hide-header
           hide-modes
           :initial-mode="activeField || 'qty'"
-          :key="numpadKey"
+          :value="activeFieldValue"
+          :key="`${pos.selectedItemIdx}-${activeField}`"
           @update="onNumpadUpdate"
         />
       </div>
@@ -234,6 +235,14 @@ const activeField = ref<'qty' | 'rate' | 'discount' | null>('qty');
 const uomConversionFactors = ref<Array<{ uom: string; conversion_factor: number }>>([]);
 const uomPrices = ref<Record<string, number>>({});
 const numpadKey = ref(0);
+
+const activeFieldValue = computed(() => {
+  if (!item.value) return 0;
+  if (activeField.value === 'qty') return item.value.qty;
+  if (activeField.value === 'rate') return item.value.rate;
+  if (activeField.value === 'discount') return item.value.discount_percentage || 0;
+  return 0;
+});
 
 watch(
   () => item.value?.item_code,
