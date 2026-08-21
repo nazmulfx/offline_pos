@@ -870,8 +870,13 @@ export const usePOSStore = defineStore('pos', () => {
       return;
     }
 
-    // Check if item already exists in cart and duplicate modal is enabled
-    const isModalEnabled = (session.value?.show_duplicate_item_modal !== undefined ? session.value.show_duplicate_item_modal !== 0 : true) && Number(localStorage.getItem('pos_show_duplicate_item_modal') ?? '1') !== 0;
+    // Check if item already exists in cart and duplicate modal is enabled (1 = show modal, any other value = skip)
+    const sessionVal = session.value?.show_duplicate_item_modal;
+    const lsVal = localStorage.getItem('pos_show_duplicate_item_modal');
+
+    const isModalEnabled = sessionVal !== undefined && sessionVal !== null
+      ? (sessionVal === 1 || sessionVal === '1' || sessionVal === true)
+      : (lsVal === '1' || lsVal === 'true');
 
     if (!forceNew) {
       const existingRows = cartItems.value
@@ -892,15 +897,16 @@ export const usePOSStore = defineStore('pos', () => {
           };
           return;
         } else {
-          // Modal disabled: auto-increment existing matching row if found
+          // Modal disabled (0 / skip): auto-increment existing item row
           let uom = item.uom || item.stock_uom || 'Nos';
-          const existingIdx = cartItems.value.findIndex(
+          let existingIdx = cartItems.value.findIndex(
             (ci) => ci.item_code === item.item_code && ci.uom === uom
           );
-          if (existingIdx !== -1) {
-            addQtyToExistingRow(existingIdx);
-            return;
+          if (existingIdx === -1) {
+            existingIdx = existingRows[0].idx;
           }
+          addQtyToExistingRow(existingIdx);
+          return;
         }
       }
     }
@@ -1361,33 +1367,21 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
-  async function initSession(openingEntry: any, profileData: any) {
-    // Fetch POS Settings (invoice_type, custom_default_customer, allow_due_sale_on_default_customer)
+  async function fetchPOSSettings(): Promise<any> {
     let posSettingsDoc: any = null;
     try {
       if (network.isOnline) {
-        console.log(`[POSStore] Fetching POS Settings and System Currency from server...`);
-        const [settingsDoc, sysCurrency] = await Promise.all([
-          call('frappe.client.get', {
-            doctype: 'POS Settings',
-            name: 'POS Settings',
-          }),
-          call('frappe.client.get_single_value', {
-            doctype: 'System Settings',
-            field: 'currency',
-          }),
-        ]);
-        if (settingsDoc) {
-          posSettingsDoc = settingsDoc;
-          await cachePOSSettings(settingsDoc);
-          localStorage.setItem('cached_pos_settings', JSON.stringify(settingsDoc));
-        }
-        if (sysCurrency) {
-          localStorage.setItem('pos_system_currency', sysCurrency);
+        posSettingsDoc = await call('frappe.client.get', {
+          doctype: 'POS Settings',
+          name: 'POS Settings',
+        });
+        if (posSettingsDoc) {
+          await cachePOSSettings(posSettingsDoc);
+          localStorage.setItem('cached_pos_settings', JSON.stringify(posSettingsDoc));
         }
       }
     } catch (err) {
-      console.warn('[POSStore] Could not fetch POS Settings or System Currency values from server:', err);
+      console.warn('[POSStore] Could not fetch POS Settings from server:', err);
     }
 
     if (!posSettingsDoc) {
@@ -1406,12 +1400,34 @@ export const usePOSStore = defineStore('pos', () => {
       }
     }
 
+    if (posSettingsDoc) {
+      const rawDupModalSetting = posSettingsDoc.show_duplicate_item_modal;
+      const showDuplicateItemModal: number = (
+        rawDupModalSetting === 1 || rawDupModalSetting === '1' || rawDupModalSetting === true
+      ) ? 1 : 0;
+
+      localStorage.setItem('pos_show_duplicate_item_modal', String(showDuplicateItemModal));
+
+      if (session.value) {
+        session.value.show_duplicate_item_modal = showDuplicateItemModal;
+        localStorage.setItem('pos_session', JSON.stringify(session.value));
+      }
+    }
+
+    return posSettingsDoc;
+  }
+
+  async function initSession(openingEntry: any, profileData: any) {
+    // Fetch POS Settings (invoice_type, custom_default_customer, allow_due_sale_on_default_customer)
+    let posSettingsDoc: any = await fetchPOSSettings();
+
     const invoiceType: 'POS Invoice' | 'Sales Invoice' = posSettingsDoc?.invoice_type === 'Sales Invoice' ? 'Sales Invoice' : 'POS Invoice';
     const defaultCustomerName: string | null = posSettingsDoc?.custom_default_customer || localStorage.getItem('pos_default_customer_name') || null;
     const allowDueSaleOnDefaultCustomer: number = posSettingsDoc?.allow_due_sale_on_default_customer ? 1 : 0;
-    const showDuplicateItemModal: number = posSettingsDoc?.show_duplicate_item_modal !== undefined
-      ? (posSettingsDoc.show_duplicate_item_modal ? 1 : 0)
-      : 1;
+    const rawDupModalSetting = posSettingsDoc?.show_duplicate_item_modal;
+    const showDuplicateItemModal: number = (
+      rawDupModalSetting === 1 || rawDupModalSetting === '1' || rawDupModalSetting === true
+    ) ? 1 : 0;
 
     if (defaultCustomerName) {
       localStorage.setItem('pos_default_customer_name', defaultCustomerName);
@@ -2318,7 +2334,7 @@ export const usePOSStore = defineStore('pos', () => {
 
   return {
     // Session
-    session, isSessionLoading, initSession, clearSession,
+    session, isSessionLoading, initSession, clearSession, fetchPOSSettings,
     // Items
     items, itemGroups, selectedGroup, searchTerm, itemsLoading,
     loadItems, searchItems, filterByGroup, prefetchAllItems,

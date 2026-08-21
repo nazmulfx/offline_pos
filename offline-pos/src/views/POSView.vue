@@ -415,6 +415,7 @@ onMounted(() => {
     router.replace({ name: 'POSOpening' });
     return;
   }
+  pos.fetchPOSSettings();
   validateSessionOnline();
   updateClock();
   clockTimer = setInterval(updateClock, 1000);
