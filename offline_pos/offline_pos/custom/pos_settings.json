@@ -20,6 +20,7 @@
    "report_hide": 0,
    "reqd": 0,
    "unique": 0,
+   "module": "Offline POS",
    "description": "Default Customer Set in Offline POS"
   },
   {
@@ -42,8 +43,32 @@
    "report_hide": 0,
    "reqd": 0,
    "unique": 0,
+   "module": "Offline POS",
    "depends_on": "eval: doc.custom_default_customer",
    "description": "This allows you to Credit Sale on Cash Customer/Walk-in-customer. keep it unchecked if you do not understand it properly."
+  },
+  {
+   "allow_on_submit": 0,
+   "bold": 0,
+   "collapsible": 0,
+   "dt": "POS Settings",
+   "fieldname": "show_duplicate_item_modal",
+   "fieldtype": "Check",
+   "hidden": 0,
+   "in_global_search": 0,
+   "in_list_view": 0,
+   "in_standard_filter": 0,
+   "insert_after": "allow_due_sale_on_default_customer",
+   "label": "Show Duplicate Item Modal",
+   "no_copy": 0,
+   "options": "",
+   "default": 1,
+   "read_only": 0,
+   "report_hide": 0,
+   "reqd": 0,
+   "unique": 0,
+   "module": "Offline POS",
+   "description": "in Offline POS, Show Duplicate Item Modal when Cashier adds item to Cart. Show Modal when the item is already added to cart."
   }
  ],
  "custom_perms": [],

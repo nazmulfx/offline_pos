@@ -2,6 +2,7 @@
 	<div class="pos-app">
 		<router-view />
     <POSAlertModal />
+    <DuplicateItemModal />
 
 		<!-- PWA Update Notification Banner -->
 		<transition name="fade-slide">
@@ -32,6 +33,7 @@ import { useNetworkStore } from './stores/networkStore';
 import { useSyncStore } from './stores/syncStore';
 import { usePOSStore } from './stores/posStore';
 import POSAlertModal from './components/pos/POSAlertModal.vue';
+import DuplicateItemModal from './components/pos/DuplicateItemModal.vue';
 
 const network = useNetworkStore();
 const sync = useSyncStore();

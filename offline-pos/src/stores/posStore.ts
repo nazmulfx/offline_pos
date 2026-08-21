@@ -37,6 +37,19 @@ export interface POSAlertConfig {
   saveToQueueText?: string;
 }
 
+export interface DuplicateCartItemRow {
+  idx: number;
+  item_code: string;
+  item_name: string;
+  uom: string;
+  qty: number;
+}
+
+export interface DuplicateItemAlertConfig {
+  item: POSItem;
+  rows: DuplicateCartItemRow[];
+}
+
 export interface CartItemAllocation {
   batch_no: string;
   serial_no: string; // Newline-separated serials
@@ -104,6 +117,7 @@ export interface POSSession {
   disable_rounded_total?: number;
   allow_due_sale_on_default_customer?: number;
   custom_default_customer?: string;
+  show_duplicate_item_modal?: number;
 }
 
 
@@ -194,6 +208,58 @@ export const usePOSStore = defineStore('pos', () => {
 
   function closeAlert() {
     activeAlert.value = null;
+  }
+
+  // ─── Duplicate Item Modal State ───────────────────────────────────────────
+  const duplicateItemAlert = ref<DuplicateItemAlertConfig | null>(null);
+
+  function closeDuplicateItemAlert() {
+    duplicateItemAlert.value = null;
+  }
+
+  function addQtyToExistingRow(idx: number) {
+    const existing = cartItems.value[idx];
+    if (!existing) return;
+
+    const item = items.value.find(i => i.item_code === existing.item_code);
+    let actualQty = item?.actual_qty ?? 999999;
+    const meta = serialBatchMap.value[existing.item_code];
+    if (meta) {
+      if (meta.has_serial_no) {
+        const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
+        actualQty = activeSerials.length;
+      } else if (meta.has_batch_no) {
+        actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
+      }
+    }
+
+    const neededQty = (existing.qty + 1) * (existing.conversion_factor || 1);
+    if (existing.is_stock_item && neededQty > actualQty) {
+      const factor = existing.conversion_factor || 1;
+      const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+      showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${existing.uom}.`);
+      return;
+    }
+
+    existing.qty += 1;
+    existing.amount = existing.qty * existing.rate;
+    handleCartItemQtyChange(existing, idx);
+    selectCartItem(idx);
+    duplicateItemAlert.value = null;
+  }
+
+  async function forceAddToCart(item: POSItem) {
+    duplicateItemAlert.value = null;
+    const baseUom = item.uom || item.stock_uom || 'Nos';
+    const existingBaseIdx = cartItems.value.findIndex(
+      (ci) => ci.item_code === item.item_code && ci.uom === baseUom
+    );
+
+    if (existingBaseIdx !== -1) {
+      addQtyToExistingRow(existingBaseIdx);
+    } else {
+      await addToCart(item, true);
+    }
   }
 
   // ─── Toast Notifications ──────────────────────────────────────────────────
@@ -783,7 +849,7 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
-  async function addToCart(item: POSItem) {
+  async function addToCart(item: POSItem, forceNew: boolean = false) {
     if (network.isOnline && (item.has_serial_no || item.has_batch_no)) {
       await refreshItemSerialBatchDataFromServer(item.item_code);
     }
@@ -804,6 +870,41 @@ export const usePOSStore = defineStore('pos', () => {
       return;
     }
 
+    // Check if item already exists in cart and duplicate modal is enabled
+    const isModalEnabled = (session.value?.show_duplicate_item_modal !== undefined ? session.value.show_duplicate_item_modal !== 0 : true) && Number(localStorage.getItem('pos_show_duplicate_item_modal') ?? '1') !== 0;
+
+    if (!forceNew) {
+      const existingRows = cartItems.value
+        .map((ci, idx) => ({ ci, idx }))
+        .filter(({ ci }) => ci.item_code === item.item_code);
+
+      if (existingRows.length > 0) {
+        if (isModalEnabled) {
+          duplicateItemAlert.value = {
+            item,
+            rows: existingRows.map(({ ci, idx }) => ({
+              idx,
+              item_code: ci.item_code,
+              item_name: ci.item_name,
+              uom: ci.uom,
+              qty: ci.qty
+            }))
+          };
+          return;
+        } else {
+          // Modal disabled: auto-increment existing matching row if found
+          let uom = item.uom || item.stock_uom || 'Nos';
+          const existingIdx = cartItems.value.findIndex(
+            (ci) => ci.item_code === item.item_code && ci.uom === uom
+          );
+          if (existingIdx !== -1) {
+            addQtyToExistingRow(existingIdx);
+            return;
+          }
+        }
+      }
+    }
+
     let uom = item.uom || item.stock_uom || 'Nos';
     let rate = item.price_list_rate || 0;
     let conversionFactor = 1;
@@ -818,61 +919,41 @@ export const usePOSStore = defineStore('pos', () => {
       }
     }
 
-    const existingIdx = cartItems.value.findIndex(
-      (ci) => ci.item_code === item.item_code && ci.uom === uom && (ci.batch_no || '') === selectedBatchNo
-    );
+    const newCartItem: CartItem = {
+      item_code: item.item_code,
+      item_name: item.item_name,
+      qty: 1,
+      rate: rate,
+      amount: rate,
+      uom: uom,
+      discount_percentage: 0,
+      batch_no: selectedBatchNo,
+      warehouse: session.value?.warehouse || '',
+      item_tax_template: item.item_tax_template,
+      item_tax_rate: item.item_tax_rate,
+      conversion_factor: conversionFactor,
+      price_list_rate: rate,
+      original_price_list_rate: rate,
+      is_stock_item: item.is_stock_item ? 1 : 0,
+      has_batch_no: item.has_batch_no || 0,
+      has_serial_no: item.has_serial_no || 0,
+      allocations: []
+    };
 
-    if (existingIdx !== -1) {
-      const existing = cartItems.value[existingIdx];
-      const neededQty = (existing.qty + 1) * (existing.conversion_factor || 1);
-      if (item.is_stock_item && neededQty > actualQty) {
-        const factor = existing.conversion_factor || 1;
-        const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
-        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${existing.uom}.`);
-        return;
-      }
-      existing.qty += 1;
-      existing.amount = existing.qty * existing.rate;
-      
-      handleCartItemQtyChange(existing, existingIdx);
-      selectCartItem(existingIdx);
-    } else {
-      const newCartItem: CartItem = {
-        item_code: item.item_code,
-        item_name: item.item_name,
-        qty: 1,
-        rate: rate,
-        amount: rate,
-        uom: uom,
-        discount_percentage: 0,
+    if (selectedBatchNo || selectedSerialNo) {
+      newCartItem.allocations = [{
         batch_no: selectedBatchNo,
-        warehouse: session.value?.warehouse || '',
-        item_tax_template: item.item_tax_template,
-        item_tax_rate: item.item_tax_rate,
-        conversion_factor: conversionFactor,
-        price_list_rate: rate,
-        original_price_list_rate: rate,
-        is_stock_item: item.is_stock_item ? 1 : 0,
-        has_batch_no: item.has_batch_no || 0,
-        has_serial_no: item.has_serial_no || 0,
-        allocations: []
-      };
-
-      if (selectedBatchNo || selectedSerialNo) {
-        newCartItem.allocations = [{
-          batch_no: selectedBatchNo,
-          serial_no: selectedSerialNo,
-          qty: 1
-        }];
-        newCartItem.serial_no = selectedSerialNo;
-      }
-      
-      cartItems.value.push(newCartItem);
-      const newIdx = cartItems.value.length - 1;
-      
-      handleCartItemQtyChange(newCartItem, newIdx);
-      selectCartItem(newIdx);
+        serial_no: selectedSerialNo,
+        qty: 1
+      }];
+      newCartItem.serial_no = selectedSerialNo;
     }
+    
+    cartItems.value.push(newCartItem);
+    const newIdx = cartItems.value.length - 1;
+    
+    handleCartItemQtyChange(newCartItem, newIdx);
+    selectCartItem(newIdx);
   }
 
   function selectCartItem(idx: number | null) {
@@ -1328,6 +1409,9 @@ export const usePOSStore = defineStore('pos', () => {
     const invoiceType: 'POS Invoice' | 'Sales Invoice' = posSettingsDoc?.invoice_type === 'Sales Invoice' ? 'Sales Invoice' : 'POS Invoice';
     const defaultCustomerName: string | null = posSettingsDoc?.custom_default_customer || localStorage.getItem('pos_default_customer_name') || null;
     const allowDueSaleOnDefaultCustomer: number = posSettingsDoc?.allow_due_sale_on_default_customer ? 1 : 0;
+    const showDuplicateItemModal: number = posSettingsDoc?.show_duplicate_item_modal !== undefined
+      ? (posSettingsDoc.show_duplicate_item_modal ? 1 : 0)
+      : 1;
 
     if (defaultCustomerName) {
       localStorage.setItem('pos_default_customer_name', defaultCustomerName);
@@ -1335,6 +1419,7 @@ export const usePOSStore = defineStore('pos', () => {
       localStorage.removeItem('pos_default_customer_name');
     }
     localStorage.setItem('pos_allow_due_sale_on_default_customer', String(allowDueSaleOnDefaultCustomer));
+    localStorage.setItem('pos_show_duplicate_item_modal', String(showDuplicateItemModal));
 
     let fullOpeningEntry = openingEntry;
     if (!openingEntry.balance_details) {
@@ -1404,6 +1489,7 @@ export const usePOSStore = defineStore('pos', () => {
       disable_rounded_total: profileData.disable_rounded_total,
       allow_due_sale_on_default_customer: allowDueSaleOnDefaultCustomer,
       custom_default_customer: defaultCustomerName || undefined,
+      show_duplicate_item_modal: showDuplicateItemModal,
     };
 
     if (!selectedCustomer.value && defaultCustomerName) {
@@ -2134,7 +2220,15 @@ export const usePOSStore = defineStore('pos', () => {
         network.isOnline
       );
       if (item) {
-        addToCart(item);
+        const baseUom = item.uom || item.stock_uom || 'Nos';
+        const existingIdx = cartItems.value.findIndex(
+          (ci) => ci.item_code === item.item_code && ci.uom === baseUom
+        );
+        if (existingIdx !== -1) {
+          addQtyToExistingRow(existingIdx);
+        } else {
+          await addToCart(item, true);
+        }
         return true;
       }
     } catch (e) {
@@ -2242,6 +2336,7 @@ export const usePOSStore = defineStore('pos', () => {
     serialBatchMap, pickStrategy, getAvailableStockPool, autoSelectSerialsAndBatches, handleCartItemQtyChange, handleBarcodeScanOrSearch, refreshSerialBatchDataFromServer, refreshItemSerialBatchDataFromServer,
     // designed alert & toast
     activeAlert, showAlert, closeAlert, saveFailedOnlineInvoiceToSyncQueue, toast, showToast,
+    duplicateItemAlert, closeDuplicateItemAlert, addQtyToExistingRow, forceAddToCart,
     // Totals
     subtotal, totalDiscount, grandTotal, roundedTotal, roundingAdjustment, cartCount, taxes, totalTaxes,
     // Held Invoices
