@@ -7,7 +7,7 @@ import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
 import { fetchItems, fetchItemByBarcode } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
-import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers, cachePartyBalance, getCachedPartyBalance, saveHoldInvoice, updateHoldInvoice, getHoldInvoices, deleteHoldInvoice } from '../db/posDB';
+import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers, cachePartyBalance, getCachedPartyBalance, saveHoldInvoice, updateHoldInvoice, getHoldInvoices, deleteHoldInvoice, cachePOSSettings, getCachedPOSSettings } from '../db/posDB';
 import call from '../lib/call';
 
 export interface POSItem {
@@ -102,6 +102,8 @@ export interface POSSession {
   allow_rate_change?: number;
   allow_discount_change?: number;
   disable_rounded_total?: number;
+  allow_due_sale_on_default_customer?: number;
+  custom_default_customer?: string;
 }
 
 
@@ -1279,43 +1281,60 @@ export const usePOSStore = defineStore('pos', () => {
   }
 
   async function initSession(openingEntry: any, profileData: any) {
-    // Fetch invoice_type and custom_default_customer from POS Settings
-    let invoiceType: 'POS Invoice' | 'Sales Invoice' = 'POS Invoice';
-    let defaultCustomerName: string | null = null;
+    // Fetch POS Settings (invoice_type, custom_default_customer, allow_due_sale_on_default_customer)
+    let posSettingsDoc: any = null;
     try {
       if (network.isOnline) {
         console.log(`[POSStore] Fetching POS Settings and System Currency from server...`);
-        const [invType, defCust, sysCurrency] = await Promise.all([
-          call('frappe.client.get_single_value', {
+        const [settingsDoc, sysCurrency] = await Promise.all([
+          call('frappe.client.get', {
             doctype: 'POS Settings',
-            field: 'invoice_type',
-          }),
-          call('frappe.client.get_single_value', {
-            doctype: 'POS Settings',
-            field: 'custom_default_customer',
+            name: 'POS Settings',
           }),
           call('frappe.client.get_single_value', {
             doctype: 'System Settings',
             field: 'currency',
           }),
         ]);
-        if (invType === 'Sales Invoice') invoiceType = 'Sales Invoice';
-        defaultCustomerName = defCust;
-        if (defaultCustomerName) {
-          localStorage.setItem('pos_default_customer_name', defaultCustomerName);
-        } else {
-          localStorage.removeItem('pos_default_customer_name');
+        if (settingsDoc) {
+          posSettingsDoc = settingsDoc;
+          await cachePOSSettings(settingsDoc);
+          localStorage.setItem('cached_pos_settings', JSON.stringify(settingsDoc));
         }
         if (sysCurrency) {
           localStorage.setItem('pos_system_currency', sysCurrency);
         }
-      } else {
-        defaultCustomerName = localStorage.getItem('pos_default_customer_name');
       }
     } catch (err) {
-      console.warn('[POSStore] Could not fetch POS Settings or System Currency values:', err);
-      defaultCustomerName = localStorage.getItem('pos_default_customer_name');
+      console.warn('[POSStore] Could not fetch POS Settings or System Currency values from server:', err);
     }
+
+    if (!posSettingsDoc) {
+      try {
+        posSettingsDoc = await getCachedPOSSettings();
+      } catch (err) {
+        console.warn('[POSStore] Failed to load POS Settings from IndexedDB:', err);
+      }
+      if (!posSettingsDoc) {
+        const lsSettings = localStorage.getItem('cached_pos_settings');
+        if (lsSettings) {
+          try {
+            posSettingsDoc = JSON.parse(lsSettings);
+          } catch (_) {}
+        }
+      }
+    }
+
+    const invoiceType: 'POS Invoice' | 'Sales Invoice' = posSettingsDoc?.invoice_type === 'Sales Invoice' ? 'Sales Invoice' : 'POS Invoice';
+    const defaultCustomerName: string | null = posSettingsDoc?.custom_default_customer || localStorage.getItem('pos_default_customer_name') || null;
+    const allowDueSaleOnDefaultCustomer: number = posSettingsDoc?.allow_due_sale_on_default_customer ? 1 : 0;
+
+    if (defaultCustomerName) {
+      localStorage.setItem('pos_default_customer_name', defaultCustomerName);
+    } else {
+      localStorage.removeItem('pos_default_customer_name');
+    }
+    localStorage.setItem('pos_allow_due_sale_on_default_customer', String(allowDueSaleOnDefaultCustomer));
 
     let fullOpeningEntry = openingEntry;
     if (!openingEntry.balance_details) {
@@ -1383,6 +1402,8 @@ export const usePOSStore = defineStore('pos', () => {
       allow_rate_change: profileData.allow_rate_change,
       allow_discount_change: profileData.allow_discount_change,
       disable_rounded_total: profileData.disable_rounded_total,
+      allow_due_sale_on_default_customer: allowDueSaleOnDefaultCustomer,
+      custom_default_customer: defaultCustomerName || undefined,
     };
 
     if (!selectedCustomer.value && defaultCustomerName) {
