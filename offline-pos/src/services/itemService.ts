@@ -39,7 +39,7 @@ export async function fetchItems(opts: FetchItemsOptions): Promise<any[]> {
           search_term: search,
         }
       );
-      const fetched: any[] = result?.items || [];
+      const fetched: any[] = (result?.items || []).filter((item: any) => !item.disabled || item.disabled === 0);
       if (fetched.length > 0) {
         await cacheItems(fetched);
       }
@@ -74,7 +74,8 @@ export async function fetchItemByBarcode(
           search_term: barcode,
         }
       );
-      return result?.items?.[0] || null;
+      const items = (result?.items || []).filter((item: any) => !item.disabled || item.disabled === 0);
+      return items[0] || null;
     } catch {
       /* fall through */
     }

@@ -500,38 +500,40 @@ export const usePOSStore = defineStore('pos', () => {
           const tx = db.transaction('items', 'readwrite');
           const store = tx.objectStore('items');
 
-          result.forEach((item: any) => {
-            const uoms = uomList
-              .filter((ud: any) => ud.parent === item.item_code)
-              .map((ud: any) => ({
-                uom: ud.uom,
-                conversion_factor: ud.conversion_factor,
-              }));
-            
-            if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
-              uoms.push({ uom: item.uom, conversion_factor: 1 });
-            }
-            if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
-              uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
-            }
-            item.uoms = uoms;
+          result
+            .filter((item: any) => !item.disabled || item.disabled === 0)
+            .forEach((item: any) => {
+              const uoms = uomList
+                .filter((ud: any) => ud.parent === item.item_code)
+                .map((ud: any) => ({
+                  uom: ud.uom,
+                  conversion_factor: ud.conversion_factor,
+                }));
+              
+              if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
+                uoms.push({ uom: item.uom, conversion_factor: 1 });
+              }
+              if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
+                uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
+              }
+              item.uoms = uoms;
 
-            const pricesMap: Record<string, number> = {};
-            if (item.price_list_rate !== undefined) {
-              pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
-            }
-            priceListRecords
-              .filter((pd: any) => pd.item_code === item.item_code)
-              .forEach((pd: any) => {
-                if (pd.uom && pd.price_list_rate !== undefined) {
-                  pricesMap[pd.uom] = pd.price_list_rate;
-                }
-              });
-            item.prices = pricesMap;
-            item.price_list_name = priceList;
+              const pricesMap: Record<string, number> = {};
+              if (item.price_list_rate !== undefined) {
+                pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
+              }
+              priceListRecords
+                .filter((pd: any) => pd.item_code === item.item_code)
+                .forEach((pd: any) => {
+                  if (pd.uom && pd.price_list_rate !== undefined) {
+                    pricesMap[pd.uom] = pd.price_list_rate;
+                  }
+                });
+              item.prices = pricesMap;
+              item.price_list_name = priceList;
 
-            store.put(item);
-          });
+              store.put(item);
+            });
 
           await new Promise<void>((resolve, reject) => {
             tx.oncomplete = () => resolve();
@@ -1607,38 +1609,40 @@ export const usePOSStore = defineStore('pos', () => {
           const tx = db.transaction('items', 'readwrite');
           const store = tx.objectStore('items');
           
-          result.forEach((item: any) => {
-            const uoms = uomList
-              .filter((ud: any) => ud.parent === item.item_code)
-              .map((ud: any) => ({
-                uom: ud.uom,
-                conversion_factor: ud.conversion_factor,
-              }));
-            
-            if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
-              uoms.push({ uom: item.uom, conversion_factor: 1 });
-            }
-            if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
-              uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
-            }
-            item.uoms = uoms;
-            
-            const pricesMap: Record<string, number> = {};
-            if (item.price_list_rate !== undefined) {
-              pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
-            }
-            priceListRecords
-              .filter((pd: any) => pd.item_code === item.item_code)
-              .forEach((pd: any) => {
-                if (pd.uom && pd.price_list_rate !== undefined) {
-                  pricesMap[pd.uom] = pd.price_list_rate;
-                }
-              });
-            item.prices = pricesMap;
-            item.price_list_name = priceList;
-            
-            store.put(item);
-          });
+          result
+            .filter((item: any) => !item.disabled || item.disabled === 0)
+            .forEach((item: any) => {
+              const uoms = uomList
+                .filter((ud: any) => ud.parent === item.item_code)
+                .map((ud: any) => ({
+                  uom: ud.uom,
+                  conversion_factor: ud.conversion_factor,
+                }));
+              
+              if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
+                uoms.push({ uom: item.uom, conversion_factor: 1 });
+              }
+              if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
+                uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
+              }
+              item.uoms = uoms;
+              
+              const pricesMap: Record<string, number> = {};
+              if (item.price_list_rate !== undefined) {
+                pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
+              }
+              priceListRecords
+                .filter((pd: any) => pd.item_code === item.item_code)
+                .forEach((pd: any) => {
+                  if (pd.uom && pd.price_list_rate !== undefined) {
+                    pricesMap[pd.uom] = pd.price_list_rate;
+                  }
+                });
+              item.prices = pricesMap;
+              item.price_list_name = priceList;
+              
+              store.put(item);
+            });
           
           await new Promise<void>((resolve, reject) => {
             tx.oncomplete = () => resolve();

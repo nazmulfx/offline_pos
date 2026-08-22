@@ -143,7 +143,8 @@ export async function cacheItems(items: any[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('items', 'readwrite');
     const store = tx.objectStore('items');
-    items.forEach((item) => store.put(item));
+    const validItems = items.filter((item) => !item.disabled || item.disabled === 0);
+    validItems.forEach((item) => store.put(item));
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -177,6 +178,7 @@ export async function getCachedItems(
       const req = store.getAll();
       req.onsuccess = () => {
         let results: any[] = req.result;
+        results = results.filter((i) => !i.disabled || i.disabled === 0);
         const searchLower = search.toLowerCase();
         if (search) {
           results = results.filter(

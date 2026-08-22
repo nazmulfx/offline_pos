@@ -14,12 +14,15 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
 		"posting_date": frappe.utils.today(),
 	})
 
+	filtered_items = []
 	for item in res["items"]:
 		item_code = item.get("item_code")
 		if not item_code:
 			continue
 		item_doc = frappe.get_cached_doc("Item", item_code)
-		
+		if item_doc.disabled:
+			continue
+
 		# Find tax template
 		item_tax_template = None
 		if item_doc.taxes:
@@ -40,7 +43,11 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
 		item["item_tax_rate"] = item_tax_rate
 		item["has_batch_no"] = item_doc.has_batch_no
 		item["has_serial_no"] = item_doc.has_serial_no
+		item["disabled"] = 0
 
+		filtered_items.append(item)
+
+	res["items"] = filtered_items
 	return res
 
 
