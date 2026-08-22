@@ -4,7 +4,7 @@
  */
 
 const DB_NAME = 'offline_pos_db';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 let _db: IDBDatabase | null = null;
 
@@ -36,6 +36,11 @@ export function openPOSDB(): Promise<IDBDatabase> {
       // POS Profile store
       if (!db.objectStoreNames.contains('pos_profile')) {
         db.createObjectStore('pos_profile', { keyPath: 'name' });
+      }
+
+      // POS Settings store
+      if (!db.objectStoreNames.contains('pos_settings')) {
+        db.createObjectStore('pos_settings', { keyPath: 'name' });
       }
 
       // Batches store
@@ -138,7 +143,8 @@ export async function cacheItems(items: any[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('items', 'readwrite');
     const store = tx.objectStore('items');
-    items.forEach((item) => store.put(item));
+    const validItems = items.filter((item) => !item.disabled || item.disabled === 0);
+    validItems.forEach((item) => store.put(item));
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -172,6 +178,7 @@ export async function getCachedItems(
       const req = store.getAll();
       req.onsuccess = () => {
         let results: any[] = req.result;
+        results = results.filter((i) => !i.disabled || i.disabled === 0);
         const searchLower = search.toLowerCase();
         if (search) {
           results = results.filter(
@@ -249,6 +256,21 @@ export async function cachePOSProfile(profile: any): Promise<void> {
 
 export async function getCachedPOSProfile(name: string): Promise<any | null> {
   return withStore<any>('pos_profile', 'readonly', (store) => store.get(name));
+}
+
+// ─── POS Settings ───────────────────────────────────────────────────────────
+
+export async function cachePOSSettings(settings: any): Promise<void> {
+  const doc = { name: 'POS Settings', ...settings };
+  return withStore<IDBValidKey>('pos_settings', 'readwrite', (store) =>
+    store.put(doc)
+  ).then(() => undefined);
+}
+
+export async function getCachedPOSSettings(): Promise<any | null> {
+  return withStore<any>('pos_settings', 'readonly', (store) => store.get('POS Settings'))
+    .then((res) => res || null)
+    .catch(() => null);
 }
 
 // ─── Draft Invoices ─────────────────────────────────────────────────────────

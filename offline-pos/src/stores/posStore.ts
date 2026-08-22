@@ -7,7 +7,7 @@ import { ref, computed, watch } from 'vue';
 import { useNetworkStore } from './networkStore';
 import { fetchItems, fetchItemByBarcode } from '../services/itemService';
 import { fetchCustomers } from '../services/customerService';
-import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers, cachePartyBalance, getCachedPartyBalance, saveHoldInvoice, updateHoldInvoice, getHoldInvoices, deleteHoldInvoice } from '../db/posDB';
+import { getAllItemGroups, openPOSDB, cacheSerialBatchData, getAllSerialBatchData, getCachedCustomers, cacheCustomers, cachePartyBalance, getCachedPartyBalance, saveHoldInvoice, updateHoldInvoice, getHoldInvoices, deleteHoldInvoice, cachePOSSettings, getCachedPOSSettings } from '../db/posDB';
 import call from '../lib/call';
 
 export interface POSItem {
@@ -35,6 +35,19 @@ export interface POSAlertConfig {
   type?: 'success' | 'warning' | 'info' | 'error';
   onSaveToQueue?: () => Promise<void> | void;
   saveToQueueText?: string;
+}
+
+export interface DuplicateCartItemRow {
+  idx: number;
+  item_code: string;
+  item_name: string;
+  uom: string;
+  qty: number;
+}
+
+export interface DuplicateItemAlertConfig {
+  item: POSItem;
+  rows: DuplicateCartItemRow[];
 }
 
 export interface CartItemAllocation {
@@ -102,6 +115,9 @@ export interface POSSession {
   allow_rate_change?: number;
   allow_discount_change?: number;
   disable_rounded_total?: number;
+  allow_due_sale_on_default_customer?: number;
+  custom_default_customer?: string;
+  show_duplicate_item_modal?: number;
 }
 
 
@@ -192,6 +208,58 @@ export const usePOSStore = defineStore('pos', () => {
 
   function closeAlert() {
     activeAlert.value = null;
+  }
+
+  // ─── Duplicate Item Modal State ───────────────────────────────────────────
+  const duplicateItemAlert = ref<DuplicateItemAlertConfig | null>(null);
+
+  function closeDuplicateItemAlert() {
+    duplicateItemAlert.value = null;
+  }
+
+  function addQtyToExistingRow(idx: number) {
+    const existing = cartItems.value[idx];
+    if (!existing) return;
+
+    const item = items.value.find(i => i.item_code === existing.item_code);
+    let actualQty = item?.actual_qty ?? 999999;
+    const meta = serialBatchMap.value[existing.item_code];
+    if (meta) {
+      if (meta.has_serial_no) {
+        const activeSerials = meta.serials.filter(s => (s.status || 'Active') === 'Active');
+        actualQty = activeSerials.length;
+      } else if (meta.has_batch_no) {
+        actualQty = meta.batches.reduce((sum, b) => sum + b.qty, 0);
+      }
+    }
+
+    const neededQty = (existing.qty + 1) * (existing.conversion_factor || 1);
+    if (existing.is_stock_item && neededQty > actualQty) {
+      const factor = existing.conversion_factor || 1;
+      const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
+      showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${existing.uom}.`);
+      return;
+    }
+
+    existing.qty += 1;
+    existing.amount = existing.qty * existing.rate;
+    handleCartItemQtyChange(existing, idx);
+    selectCartItem(idx);
+    duplicateItemAlert.value = null;
+  }
+
+  async function forceAddToCart(item: POSItem) {
+    duplicateItemAlert.value = null;
+    const baseUom = item.uom || item.stock_uom || 'Nos';
+    const existingBaseIdx = cartItems.value.findIndex(
+      (ci) => ci.item_code === item.item_code && ci.uom === baseUom
+    );
+
+    if (existingBaseIdx !== -1) {
+      addQtyToExistingRow(existingBaseIdx);
+    } else {
+      await addToCart(item, true);
+    }
   }
 
   // ─── Toast Notifications ──────────────────────────────────────────────────
@@ -432,38 +500,40 @@ export const usePOSStore = defineStore('pos', () => {
           const tx = db.transaction('items', 'readwrite');
           const store = tx.objectStore('items');
 
-          result.forEach((item: any) => {
-            const uoms = uomList
-              .filter((ud: any) => ud.parent === item.item_code)
-              .map((ud: any) => ({
-                uom: ud.uom,
-                conversion_factor: ud.conversion_factor,
-              }));
-            
-            if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
-              uoms.push({ uom: item.uom, conversion_factor: 1 });
-            }
-            if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
-              uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
-            }
-            item.uoms = uoms;
+          result
+            .filter((item: any) => !item.disabled || item.disabled === 0)
+            .forEach((item: any) => {
+              const uoms = uomList
+                .filter((ud: any) => ud.parent === item.item_code)
+                .map((ud: any) => ({
+                  uom: ud.uom,
+                  conversion_factor: ud.conversion_factor,
+                }));
+              
+              if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
+                uoms.push({ uom: item.uom, conversion_factor: 1 });
+              }
+              if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
+                uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
+              }
+              item.uoms = uoms;
 
-            const pricesMap: Record<string, number> = {};
-            if (item.price_list_rate !== undefined) {
-              pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
-            }
-            priceListRecords
-              .filter((pd: any) => pd.item_code === item.item_code)
-              .forEach((pd: any) => {
-                if (pd.uom && pd.price_list_rate !== undefined) {
-                  pricesMap[pd.uom] = pd.price_list_rate;
-                }
-              });
-            item.prices = pricesMap;
-            item.price_list_name = priceList;
+              const pricesMap: Record<string, number> = {};
+              if (item.price_list_rate !== undefined) {
+                pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
+              }
+              priceListRecords
+                .filter((pd: any) => pd.item_code === item.item_code)
+                .forEach((pd: any) => {
+                  if (pd.uom && pd.price_list_rate !== undefined) {
+                    pricesMap[pd.uom] = pd.price_list_rate;
+                  }
+                });
+              item.prices = pricesMap;
+              item.price_list_name = priceList;
 
-            store.put(item);
-          });
+              store.put(item);
+            });
 
           await new Promise<void>((resolve, reject) => {
             tx.oncomplete = () => resolve();
@@ -781,7 +851,7 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
-  async function addToCart(item: POSItem) {
+  async function addToCart(item: POSItem, forceNew: boolean = false) {
     if (network.isOnline && (item.has_serial_no || item.has_batch_no)) {
       await refreshItemSerialBatchDataFromServer(item.item_code);
     }
@@ -802,6 +872,47 @@ export const usePOSStore = defineStore('pos', () => {
       return;
     }
 
+    // Check if item already exists in cart and duplicate modal is enabled (1 = show modal, any other value = skip)
+    const sessionVal = session.value?.show_duplicate_item_modal;
+    const lsVal = localStorage.getItem('pos_show_duplicate_item_modal');
+
+    const isModalEnabled = sessionVal !== undefined && sessionVal !== null
+      ? (sessionVal === 1 || sessionVal === '1' || sessionVal === true)
+      : (lsVal === '1' || lsVal === 'true');
+
+    if (!forceNew) {
+      const existingRows = cartItems.value
+        .map((ci, idx) => ({ ci, idx }))
+        .filter(({ ci }) => ci.item_code === item.item_code);
+
+      if (existingRows.length > 0) {
+        if (isModalEnabled) {
+          duplicateItemAlert.value = {
+            item,
+            rows: existingRows.map(({ ci, idx }) => ({
+              idx,
+              item_code: ci.item_code,
+              item_name: ci.item_name,
+              uom: ci.uom,
+              qty: ci.qty
+            }))
+          };
+          return;
+        } else {
+          // Modal disabled (0 / skip): auto-increment existing item row
+          let uom = item.uom || item.stock_uom || 'Nos';
+          let existingIdx = cartItems.value.findIndex(
+            (ci) => ci.item_code === item.item_code && ci.uom === uom
+          );
+          if (existingIdx === -1) {
+            existingIdx = existingRows[0].idx;
+          }
+          addQtyToExistingRow(existingIdx);
+          return;
+        }
+      }
+    }
+
     let uom = item.uom || item.stock_uom || 'Nos';
     let rate = item.price_list_rate || 0;
     let conversionFactor = 1;
@@ -816,61 +927,41 @@ export const usePOSStore = defineStore('pos', () => {
       }
     }
 
-    const existingIdx = cartItems.value.findIndex(
-      (ci) => ci.item_code === item.item_code && ci.uom === uom && (ci.batch_no || '') === selectedBatchNo
-    );
+    const newCartItem: CartItem = {
+      item_code: item.item_code,
+      item_name: item.item_name,
+      qty: 1,
+      rate: rate,
+      amount: rate,
+      uom: uom,
+      discount_percentage: 0,
+      batch_no: selectedBatchNo,
+      warehouse: session.value?.warehouse || '',
+      item_tax_template: item.item_tax_template,
+      item_tax_rate: item.item_tax_rate,
+      conversion_factor: conversionFactor,
+      price_list_rate: rate,
+      original_price_list_rate: rate,
+      is_stock_item: item.is_stock_item ? 1 : 0,
+      has_batch_no: item.has_batch_no || 0,
+      has_serial_no: item.has_serial_no || 0,
+      allocations: []
+    };
 
-    if (existingIdx !== -1) {
-      const existing = cartItems.value[existingIdx];
-      const neededQty = (existing.qty + 1) * (existing.conversion_factor || 1);
-      if (item.is_stock_item && neededQty > actualQty) {
-        const factor = existing.conversion_factor || 1;
-        const maxAllowed = Math.floor((actualQty / factor) * 1000) / 1000;
-        showAlert("Stock Limit Exceeded", `Cannot add more. Only ${actualQty} stock available. Maximum allowed quantity is ${maxAllowed} ${existing.uom}.`);
-        return;
-      }
-      existing.qty += 1;
-      existing.amount = existing.qty * existing.rate;
-      
-      handleCartItemQtyChange(existing, existingIdx);
-      selectCartItem(existingIdx);
-    } else {
-      const newCartItem: CartItem = {
-        item_code: item.item_code,
-        item_name: item.item_name,
-        qty: 1,
-        rate: rate,
-        amount: rate,
-        uom: uom,
-        discount_percentage: 0,
+    if (selectedBatchNo || selectedSerialNo) {
+      newCartItem.allocations = [{
         batch_no: selectedBatchNo,
-        warehouse: session.value?.warehouse || '',
-        item_tax_template: item.item_tax_template,
-        item_tax_rate: item.item_tax_rate,
-        conversion_factor: conversionFactor,
-        price_list_rate: rate,
-        original_price_list_rate: rate,
-        is_stock_item: item.is_stock_item ? 1 : 0,
-        has_batch_no: item.has_batch_no || 0,
-        has_serial_no: item.has_serial_no || 0,
-        allocations: []
-      };
-
-      if (selectedBatchNo || selectedSerialNo) {
-        newCartItem.allocations = [{
-          batch_no: selectedBatchNo,
-          serial_no: selectedSerialNo,
-          qty: 1
-        }];
-        newCartItem.serial_no = selectedSerialNo;
-      }
-      
-      cartItems.value.push(newCartItem);
-      const newIdx = cartItems.value.length - 1;
-      
-      handleCartItemQtyChange(newCartItem, newIdx);
-      selectCartItem(newIdx);
+        serial_no: selectedSerialNo,
+        qty: 1
+      }];
+      newCartItem.serial_no = selectedSerialNo;
     }
+    
+    cartItems.value.push(newCartItem);
+    const newIdx = cartItems.value.length - 1;
+    
+    handleCartItemQtyChange(newCartItem, newIdx);
+    selectCartItem(newIdx);
   }
 
   function selectCartItem(idx: number | null) {
@@ -1278,44 +1369,75 @@ export const usePOSStore = defineStore('pos', () => {
     }
   }
 
-  async function initSession(openingEntry: any, profileData: any) {
-    // Fetch invoice_type and custom_default_customer from POS Settings
-    let invoiceType: 'POS Invoice' | 'Sales Invoice' = 'POS Invoice';
-    let defaultCustomerName: string | null = null;
+  async function fetchPOSSettings(): Promise<any> {
+    let posSettingsDoc: any = null;
     try {
       if (network.isOnline) {
-        console.log(`[POSStore] Fetching POS Settings and System Currency from server...`);
-        const [invType, defCust, sysCurrency] = await Promise.all([
-          call('frappe.client.get_single_value', {
-            doctype: 'POS Settings',
-            field: 'invoice_type',
-          }),
-          call('frappe.client.get_single_value', {
-            doctype: 'POS Settings',
-            field: 'custom_default_customer',
-          }),
-          call('frappe.client.get_single_value', {
-            doctype: 'System Settings',
-            field: 'currency',
-          }),
-        ]);
-        if (invType === 'Sales Invoice') invoiceType = 'Sales Invoice';
-        defaultCustomerName = defCust;
-        if (defaultCustomerName) {
-          localStorage.setItem('pos_default_customer_name', defaultCustomerName);
-        } else {
-          localStorage.removeItem('pos_default_customer_name');
+        posSettingsDoc = await call('frappe.client.get', {
+          doctype: 'POS Settings',
+          name: 'POS Settings',
+        });
+        if (posSettingsDoc) {
+          await cachePOSSettings(posSettingsDoc);
+          localStorage.setItem('cached_pos_settings', JSON.stringify(posSettingsDoc));
         }
-        if (sysCurrency) {
-          localStorage.setItem('pos_system_currency', sysCurrency);
-        }
-      } else {
-        defaultCustomerName = localStorage.getItem('pos_default_customer_name');
       }
     } catch (err) {
-      console.warn('[POSStore] Could not fetch POS Settings or System Currency values:', err);
-      defaultCustomerName = localStorage.getItem('pos_default_customer_name');
+      console.warn('[POSStore] Could not fetch POS Settings from server:', err);
     }
+
+    if (!posSettingsDoc) {
+      try {
+        posSettingsDoc = await getCachedPOSSettings();
+      } catch (err) {
+        console.warn('[POSStore] Failed to load POS Settings from IndexedDB:', err);
+      }
+      if (!posSettingsDoc) {
+        const lsSettings = localStorage.getItem('cached_pos_settings');
+        if (lsSettings) {
+          try {
+            posSettingsDoc = JSON.parse(lsSettings);
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (posSettingsDoc) {
+      const rawDupModalSetting = posSettingsDoc.show_duplicate_item_modal;
+      const showDuplicateItemModal: number = (
+        rawDupModalSetting === 1 || rawDupModalSetting === '1' || rawDupModalSetting === true
+      ) ? 1 : 0;
+
+      localStorage.setItem('pos_show_duplicate_item_modal', String(showDuplicateItemModal));
+
+      if (session.value) {
+        session.value.show_duplicate_item_modal = showDuplicateItemModal;
+        localStorage.setItem('pos_session', JSON.stringify(session.value));
+      }
+    }
+
+    return posSettingsDoc;
+  }
+
+  async function initSession(openingEntry: any, profileData: any) {
+    // Fetch POS Settings (invoice_type, custom_default_customer, allow_due_sale_on_default_customer)
+    let posSettingsDoc: any = await fetchPOSSettings();
+
+    const invoiceType: 'POS Invoice' | 'Sales Invoice' = posSettingsDoc?.invoice_type === 'Sales Invoice' ? 'Sales Invoice' : 'POS Invoice';
+    const defaultCustomerName: string | null = posSettingsDoc?.custom_default_customer || localStorage.getItem('pos_default_customer_name') || null;
+    const allowDueSaleOnDefaultCustomer: number = posSettingsDoc?.allow_due_sale_on_default_customer ? 1 : 0;
+    const rawDupModalSetting = posSettingsDoc?.show_duplicate_item_modal;
+    const showDuplicateItemModal: number = (
+      rawDupModalSetting === 1 || rawDupModalSetting === '1' || rawDupModalSetting === true
+    ) ? 1 : 0;
+
+    if (defaultCustomerName) {
+      localStorage.setItem('pos_default_customer_name', defaultCustomerName);
+    } else {
+      localStorage.removeItem('pos_default_customer_name');
+    }
+    localStorage.setItem('pos_allow_due_sale_on_default_customer', String(allowDueSaleOnDefaultCustomer));
+    localStorage.setItem('pos_show_duplicate_item_modal', String(showDuplicateItemModal));
 
     let fullOpeningEntry = openingEntry;
     if (!openingEntry.balance_details) {
@@ -1383,6 +1505,9 @@ export const usePOSStore = defineStore('pos', () => {
       allow_rate_change: profileData.allow_rate_change,
       allow_discount_change: profileData.allow_discount_change,
       disable_rounded_total: profileData.disable_rounded_total,
+      allow_due_sale_on_default_customer: allowDueSaleOnDefaultCustomer,
+      custom_default_customer: defaultCustomerName || undefined,
+      show_duplicate_item_modal: showDuplicateItemModal,
     };
 
     if (!selectedCustomer.value && defaultCustomerName) {
@@ -1484,38 +1609,40 @@ export const usePOSStore = defineStore('pos', () => {
           const tx = db.transaction('items', 'readwrite');
           const store = tx.objectStore('items');
           
-          result.forEach((item: any) => {
-            const uoms = uomList
-              .filter((ud: any) => ud.parent === item.item_code)
-              .map((ud: any) => ({
-                uom: ud.uom,
-                conversion_factor: ud.conversion_factor,
-              }));
-            
-            if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
-              uoms.push({ uom: item.uom, conversion_factor: 1 });
-            }
-            if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
-              uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
-            }
-            item.uoms = uoms;
-            
-            const pricesMap: Record<string, number> = {};
-            if (item.price_list_rate !== undefined) {
-              pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
-            }
-            priceListRecords
-              .filter((pd: any) => pd.item_code === item.item_code)
-              .forEach((pd: any) => {
-                if (pd.uom && pd.price_list_rate !== undefined) {
-                  pricesMap[pd.uom] = pd.price_list_rate;
-                }
-              });
-            item.prices = pricesMap;
-            item.price_list_name = priceList;
-            
-            store.put(item);
-          });
+          result
+            .filter((item: any) => !item.disabled || item.disabled === 0)
+            .forEach((item: any) => {
+              const uoms = uomList
+                .filter((ud: any) => ud.parent === item.item_code)
+                .map((ud: any) => ({
+                  uom: ud.uom,
+                  conversion_factor: ud.conversion_factor,
+                }));
+              
+              if (item.uom && !uoms.some((u: any) => u.uom === item.uom)) {
+                uoms.push({ uom: item.uom, conversion_factor: 1 });
+              }
+              if (item.stock_uom && !uoms.some((u: any) => u.uom === item.stock_uom)) {
+                uoms.push({ uom: item.stock_uom, conversion_factor: 1 });
+              }
+              item.uoms = uoms;
+              
+              const pricesMap: Record<string, number> = {};
+              if (item.price_list_rate !== undefined) {
+                pricesMap[item.uom || item.stock_uom] = item.price_list_rate;
+              }
+              priceListRecords
+                .filter((pd: any) => pd.item_code === item.item_code)
+                .forEach((pd: any) => {
+                  if (pd.uom && pd.price_list_rate !== undefined) {
+                    pricesMap[pd.uom] = pd.price_list_rate;
+                  }
+                });
+              item.prices = pricesMap;
+              item.price_list_name = priceList;
+              
+              store.put(item);
+            });
           
           await new Promise<void>((resolve, reject) => {
             tx.oncomplete = () => resolve();
@@ -2113,7 +2240,15 @@ export const usePOSStore = defineStore('pos', () => {
         network.isOnline
       );
       if (item) {
-        addToCart(item);
+        const baseUom = item.uom || item.stock_uom || 'Nos';
+        const existingIdx = cartItems.value.findIndex(
+          (ci) => ci.item_code === item.item_code && ci.uom === baseUom
+        );
+        if (existingIdx !== -1) {
+          addQtyToExistingRow(existingIdx);
+        } else {
+          await addToCart(item, true);
+        }
         return true;
       }
     } catch (e) {
@@ -2203,7 +2338,7 @@ export const usePOSStore = defineStore('pos', () => {
 
   return {
     // Session
-    session, isSessionLoading, initSession, clearSession,
+    session, isSessionLoading, initSession, clearSession, fetchPOSSettings,
     // Items
     items, itemGroups, selectedGroup, searchTerm, itemsLoading,
     loadItems, searchItems, filterByGroup, prefetchAllItems,
@@ -2221,6 +2356,7 @@ export const usePOSStore = defineStore('pos', () => {
     serialBatchMap, pickStrategy, getAvailableStockPool, autoSelectSerialsAndBatches, handleCartItemQtyChange, handleBarcodeScanOrSearch, refreshSerialBatchDataFromServer, refreshItemSerialBatchDataFromServer,
     // designed alert & toast
     activeAlert, showAlert, closeAlert, saveFailedOnlineInvoiceToSyncQueue, toast, showToast,
+    duplicateItemAlert, closeDuplicateItemAlert, addQtyToExistingRow, forceAddToCart,
     // Totals
     subtotal, totalDiscount, grandTotal, roundedTotal, roundingAdjustment, cartCount, taxes, totalTaxes,
     // Held Invoices

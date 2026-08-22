@@ -47,6 +47,7 @@ const props = withDefaults(defineProps<{
   initialMode?: string;
   hideHeader?: boolean;
   hideModes?: boolean;
+  value?: number | string;
 }>(), {
   modes: () => [
     { key: 'qty', label: 'Qty' },
@@ -56,6 +57,7 @@ const props = withDefaults(defineProps<{
   initialMode: 'qty',
   hideHeader: false,
   hideModes: false,
+  value: '0',
 });
 
 const emit = defineEmits<{
@@ -64,7 +66,8 @@ const emit = defineEmits<{
 
 const keys = ['1','2','3','4','5','6','7','8','9','.','0','backspace'];
 const activeMode = ref(props.initialMode);
-const inputBuffer = ref('0');
+const inputBuffer = ref(String(props.value ?? '0'));
+const replaceOnNextKey = ref(true);
 
 const label = computed(() => {
   return props.modes.find(m => m.key === activeMode.value)?.label || '';
@@ -74,35 +77,49 @@ const displayValue = computed(() => inputBuffer.value);
 
 function setMode(mode: string) {
   activeMode.value = mode;
-  inputBuffer.value = '0';
+  inputBuffer.value = String(props.value ?? '0');
+  replaceOnNextKey.value = true;
 }
 
 function handleKey(key: string) {
   if (key === 'backspace') {
-    if (inputBuffer.value.length <= 1) {
+    if (replaceOnNextKey.value || inputBuffer.value.length <= 1) {
       inputBuffer.value = '0';
     } else {
       inputBuffer.value = inputBuffer.value.slice(0, -1);
     }
   } else if (key === '.') {
-    if (!inputBuffer.value.includes('.')) {
+    if (replaceOnNextKey.value) {
+      inputBuffer.value = '0.';
+    } else if (!inputBuffer.value.includes('.')) {
       inputBuffer.value += '.';
     }
-    return;
   } else {
-    if (inputBuffer.value === '0') {
+    if (replaceOnNextKey.value || inputBuffer.value === '0') {
       inputBuffer.value = key;
     } else {
       inputBuffer.value += key;
     }
   }
+  replaceOnNextKey.value = false;
   emit('update', activeMode.value, inputBuffer.value);
 }
 
-// Reset when mode changes externally
-watch(() => props.initialMode, (m) => {
-  activeMode.value = m;
-  inputBuffer.value = '0';
+// Reset and sync when value or mode changes externally
+watch(() => [props.value, props.initialMode], ([newVal, newMode]) => {
+  if (newMode && newMode !== activeMode.value) {
+    activeMode.value = newMode as string;
+    inputBuffer.value = String(newVal ?? '0');
+    replaceOnNextKey.value = true;
+    return;
+  }
+  const valStr = String(newVal ?? '0');
+  const numVal = parseFloat(valStr) || 0;
+  const numBuf = parseFloat(inputBuffer.value) || 0;
+  if (numVal !== numBuf) {
+    inputBuffer.value = valStr;
+    replaceOnNextKey.value = true;
+  }
 });
 </script>
 

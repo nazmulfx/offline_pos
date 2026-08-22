@@ -42,7 +42,7 @@
               <span>Amount Paid</span>
               <span :class="{ 'paid-ok': amountPaid >= payableTotal }">{{ fmt(amountPaid) }}</span>
             </div>
-            <div class="payment-modal__summary-row payment-modal__summary-row--outstanding" v-if="pos.session?.allow_partial_payment === 1 && outstandingAmount > 0">
+            <div class="payment-modal__summary-row payment-modal__summary-row--outstanding" v-if="outstandingAmount > 0">
               <span>Outstanding (Credit)</span>
               <span class="payment-modal__outstanding">{{ fmt(outstandingAmount) }}</span>
             </div>
@@ -92,7 +92,7 @@
               Exact Pay
             </button>
             <button
-              v-if="pos.session?.allow_partial_payment === 1"
+              v-if="isPartialPaymentAllowed"
               class="payment-modal__quick-btn"
               :class="{ 'payment-modal__quick-btn--credit': amountPaid === 0 }"
               @click="setCredit"
@@ -127,6 +127,16 @@
                     )
               }}
             </button>
+          </div>
+
+          <!-- Partial Payment Warning Note -->
+          <div v-if="partialPaymentWarningNote" class="payment-modal__warning-note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            {{ partialPaymentWarningNote }}
           </div>
 
           <!-- Offline reminder -->
@@ -200,15 +210,60 @@ const amountPaid = computed(() =>
 
 const change = computed(() => Math.max(0, amountPaid.value - payableTotal.value));
 
+const outstandingAmount = computed(() => Math.max(0, payableTotal.value - amountPaid.value));
+
 const netTotal = computed(() => pos.subtotal - pos.totalDiscount);
 
-const outstandingAmount = computed(() => Math.max(0, payableTotal.value - amountPaid.value));
+const isDefaultCustomer = computed(() => {
+  if (!pos.selectedCustomer) return false;
+  const defCustName = pos.session?.custom_default_customer || localStorage.getItem('pos_default_customer_name');
+  return pos.selectedCustomer.name === defCustName;
+});
+
+const isPartialPaymentAllowed = computed(() => {
+  // Master switch from POS Profile: allow_partial_payment
+  const profileAllowsPartial = pos.session?.allow_partial_payment === 1;
+  if (!profileAllowsPartial) {
+    return false;
+  }
+
+  // If selected customer is the default customer, check POS Settings exception
+  if (isDefaultCustomer.value) {
+    const defaultCustomerAllowsDue = pos.session?.allow_due_sale_on_default_customer === 1 || Number(localStorage.getItem('pos_allow_due_sale_on_default_customer')) === 1;
+    return defaultCustomerAllowsDue;
+  }
+
+  // All other customers inherit profileAllowsPartial (which is true here)
+  return true;
+});
+
+const partialPaymentWarningNote = computed(() => {
+  if (amountPaid.value >= payableTotal.value) {
+    return '';
+  }
+
+  const profileAllowsPartial = pos.session?.allow_partial_payment === 1;
+  if (!profileAllowsPartial) {
+    return 'Partial Payment is Disabled in POS Profile.';
+  }
+
+  if (isDefaultCustomer.value) {
+    const defaultCustomerAllowsDue = pos.session?.allow_due_sale_on_default_customer === 1 || Number(localStorage.getItem('pos_allow_due_sale_on_default_customer')) === 1;
+    if (!defaultCustomerAllowsDue) {
+      const custName = pos.selectedCustomer?.customer_name || pos.selectedCustomer?.name || 'Default Customer';
+      return `Partial Payment is not allowed for Default Customer ${custName}`;
+    }
+  }
+
+  return '';
+});
 
 const canSubmit = computed(() => {
   if (!pos.selectedCustomer || pos.cartItems.length === 0) return false;
-  const allowPartial = pos.session?.allow_partial_payment === 1;
-  if (allowPartial) return true;
-  return amountPaid.value >= payableTotal.value;
+  if (amountPaid.value < payableTotal.value) {
+    return isPartialPaymentAllowed.value;
+  }
+  return true;
 });
 
 function selectMethod(idx: number) {
@@ -584,6 +639,18 @@ function closeIfNotSubmitting() { if (!isSubmitting.value) close(); }
   box-shadow: 0 8px 28px rgba(99,102,241,0.4);
 }
 .payment-modal__submit-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+.payment-modal__warning-note {
+  margin: 0 20px 12px;
+  padding: 8px 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  font-size: 12px;
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .payment-modal__offline-note {
   margin: 0 20px 16px;
   padding: 8px 12px;

@@ -10,6 +10,8 @@ import {
   addToSyncQueue,
   cachePOSProfile,
   getCachedPOSProfile,
+  cachePOSSettings,
+  getCachedPOSSettings,
   getCachedPartyBalance,
   cachePrintFormat,
   getCachedPrintFormat,
@@ -487,6 +489,19 @@ export async function getPOSProfileData(posProfile: string): Promise<any> {
         data.name = posProfile;
       }
       await cachePOSProfile(data);
+
+      try {
+        const posSettingsDoc = await call('frappe.client.get', {
+          doctype: 'POS Settings',
+          name: 'POS Settings',
+        });
+        if (posSettingsDoc) {
+          await cachePOSSettings(posSettingsDoc);
+          localStorage.setItem('cached_pos_settings', JSON.stringify(posSettingsDoc));
+        }
+      } catch (sErr) {
+        console.warn('[InvoiceService] Failed to fetch/cache POS Settings doc:', sErr);
+      }
 
       if (data.company) {
         try {
