@@ -12,9 +12,10 @@ def migrate_batch_items_to_non_batch(batch_size=0, item_code=None, dry_run=0):
 	------------------------------------
 	1. Auto-Recovery on Rerun: If a server crash occurs midway after renaming ITEM-001 -> ITEM-001-old,
 	   the next run detects ITEM-001-old without active ITEM-001 and automatically finishes creating ITEM-001.
-	2. Per-Item Isolation: Each item is processed with its own transaction. A failure on one item
+	2. Item Price Duplication: Automatically duplicates all Item Prices from ITEM-001-old to the new ITEM-001.
+	3. Per-Item Isolation: Each item is processed with its own transaction. A failure on one item
 	   rolls back only that item and log the error, allowing the batch to continue.
-	3. Re-run Safety (Idempotency): Completed replacement items have has_batch_no = 0, so subsequent runs
+	4. Re-run Safety (Idempotency): Completed replacement items have has_batch_no = 0, so subsequent runs
 	   automatically ignore already migrated items.
 	"""
 	if not ("System Manager" in frappe.get_roles() or frappe.has_permission("Item", "write")):
@@ -130,12 +131,16 @@ def migrate_batch_items_to_non_batch(batch_size=0, item_code=None, dry_run=0):
 			new_doc.insert(ignore_permissions=True)
 			frappe.db.commit()
 
+			# Step E: Duplicate Item Prices from old_code -> current_code
+			prices_copied = _copy_item_prices(old_code, current_code)
+
 			results.append({
 				"item": current_code,
 				"renamed_to": old_code,
+				"prices_copied": prices_copied,
 				"status": "success"
 			})
-			print(f"[{idx}/{len(items)}] Successfully migrated '{current_code}' -> '{old_code}' and created new non-batch '{current_code}'")
+			print(f"[{idx}/{len(items)}] Successfully migrated '{current_code}' -> '{old_code}', created new non-batch '{current_code}' with {prices_copied} price(s).")
 
 		except Exception as e:
 			frappe.db.rollback()
@@ -153,10 +158,117 @@ def migrate_batch_items_to_non_batch(batch_size=0, item_code=None, dry_run=0):
 	}
 
 
+@frappe.whitelist()
+def sync_missing_item_prices(batch_size=0, item_code=None):
+	"""
+	Standalone API / script method to scan all migrated items (-old items)
+	and copy any missing Item Prices to the new active items.
+	
+	Whitelisted Call Path:
+	site_url/api/method/offline_pos.item_migration.sync_missing_item_prices
+	"""
+	if not ("System Manager" in frappe.get_roles() or frappe.has_permission("Item", "write")):
+		frappe.throw(frappe._("Not authorized to sync Item Prices"), frappe.PermissionError)
+
+	batch_size = frappe.utils.cint(batch_size)
+
+	if item_code:
+		old_code = f"{item_code}-old" if not item_code.endswith("-old") else item_code
+		target_code = old_code[:-4]
+		old_items = [old_code] if frappe.db.exists("Item", old_code) and frappe.db.exists("Item", target_code) else []
+	else:
+		query_args = {
+			"filters": {"name": ["like", "%-old"]},
+			"pluck": "name",
+			"order_by": "creation asc",
+		}
+		if batch_size > 0:
+			query_args["limit"] = batch_size
+		old_items = frappe.db.get_all("Item", **query_args)
+
+	if not old_items:
+		return {
+			"status": "success",
+			"message": "No archived -old items found to sync prices.",
+			"results": []
+		}
+
+	results = []
+	for idx, old_code in enumerate(old_items, 1):
+		if not old_code.endswith("-old"):
+			continue
+
+		target_code = old_code[:-4]
+		if frappe.db.exists("Item", target_code):
+			prices_copied = _copy_item_prices(old_code, target_code)
+			results.append({
+				"item": target_code,
+				"from_old_item": old_code,
+				"prices_copied": prices_copied
+			})
+			print(f"[{idx}/{len(old_items)}] Synced {prices_copied} Item Price(s) from '{old_code}' -> '{target_code}'")
+
+	return {
+		"status": "success",
+		"processed_count": len(results),
+		"results": results
+	}
+
+
+def _copy_item_prices(old_item_code, new_item_code):
+	"""
+	Copies all Item Price records from old_item_code to new_item_code.
+	Avoids creating duplicate Item Price records on new_item_code.
+	"""
+	old_prices = frappe.get_all(
+		"Item Price",
+		filters={"item_code": old_item_code},
+		fields=["name", "price_list", "price_list_rate", "currency", "uom", "packing_unit", "valid_from", "valid_upto", "note", "reference"]
+	)
+
+	copied_count = 0
+	for p in old_prices:
+		# Check if Item Price already exists for new_item_code
+		filters = {
+			"item_code": new_item_code,
+			"price_list": p.get("price_list"),
+			"uom": p.get("uom"),
+		}
+		if p.get("valid_from"):
+			filters["valid_from"] = p.get("valid_from")
+		if p.get("valid_upto"):
+			filters["valid_upto"] = p.get("valid_upto")
+
+		if frappe.db.exists("Item Price", filters):
+			continue
+
+		new_price = frappe.get_doc({
+			"doctype": "Item Price",
+			"item_code": new_item_code,
+			"price_list": p.get("price_list"),
+			"price_list_rate": p.get("price_list_rate"),
+			"currency": p.get("currency"),
+			"uom": p.get("uom"),
+			"packing_unit": p.get("packing_unit"),
+			"valid_from": p.get("valid_from"),
+			"valid_upto": p.get("valid_upto"),
+			"note": p.get("note"),
+			"reference": p.get("reference")
+		})
+		new_price.insert(ignore_permissions=True)
+		copied_count += 1
+
+	if copied_count > 0:
+		frappe.db.commit()
+
+	return copied_count
+
+
 def _recover_interrupted_migrations(dry_run=0):
 	"""
 	Scans for any orphaned '-old' items (e.g. ITEM-001-old) where the active item (ITEM-001)
-	is missing due to an interruption right after rename_doc, and completes the creation of ITEM-001.
+	is missing due to an interruption right after rename_doc, completes the creation of ITEM-001,
+	and copies all Item Prices.
 	"""
 	recovered = []
 	old_items = frappe.db.get_all("Item", filters={"name": ["like", "%-old"]}, pluck="name")
@@ -191,12 +303,15 @@ def _recover_interrupted_migrations(dry_run=0):
 				new_doc.insert(ignore_permissions=True)
 				frappe.db.commit()
 
+				prices_copied = _copy_item_prices(old_code, original_code)
+
 				recovered.append({
 					"item": original_code,
 					"renamed_to": old_code,
+					"prices_copied": prices_copied,
 					"status": "recovered_successfully"
 				})
-				print(f"[RECOVERY] Successfully recovered interrupted item '{original_code}' from '{old_code}'")
+				print(f"[RECOVERY] Successfully recovered interrupted item '{original_code}' from '{old_code}' with {prices_copied} price(s)")
 			except Exception as e:
 				frappe.db.rollback()
 				frappe.log_error(f"Error recovering interrupted item {original_code}", "Item Recovery Error")
