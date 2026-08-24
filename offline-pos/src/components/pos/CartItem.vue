@@ -131,7 +131,8 @@ function fmt(value: number): string {
 }
 .ci__uom {
   font-size: 11px;
-  color: var(--pos-text-muted);
+  font-weight: 700;
+  color: var(--pos-text);
   white-space: nowrap;
 }
 .ci__spacer { flex: 1; }
