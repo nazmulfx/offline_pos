@@ -130,6 +130,8 @@ def reconcile_stock_valuation_rates(company=None, warehouse=None, batch_size=500
 		  AND b.actual_qty > 0 
 		  AND i.valuation_rate > 0
 		  AND ABS(COALESCE(b.valuation_rate, 0) - i.valuation_rate) > 0.001
+		  AND i.has_serial_no = 0
+		  AND i.has_batch_no = 0
 		  {warehouse_condition}
 		ORDER BY b.warehouse, b.item_code
 	""", params, as_dict=True)
